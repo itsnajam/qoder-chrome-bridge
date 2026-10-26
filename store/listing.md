@@ -1,5 +1,15 @@
 # Chrome Web Store listing
 
+## How to submit
+
+1. Register a Chrome Web Store developer account at https://chrome.google.com/webstore/devconsole/register (one-time 5 USD fee).
+2. Click **New item** and upload `dist/chrome-bridge-1.1.0.zip`.
+3. Fill the listing from the sections below.
+4. Upload `extension/icons/icon-128.png` and `store/assets/screenshot-1.png`.
+5. Add the privacy policy URL and submit for review.
+
+Chrome blocks extensions from scripting `chrome.google.com/webstore`, so these steps must be done by hand in the dashboard.
+
 ## Name
 
 Chrome Bridge for Qoder
