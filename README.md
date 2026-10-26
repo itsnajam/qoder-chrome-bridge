@@ -86,7 +86,7 @@ Every MCP client that supports a local stdio server can use the same command. Po
 }
 ```
 
-Replace `/Users/you` with your home path. On Windows use `C:\\Users\\you\\.chrome-bridge\\mcp\\server.mjs` with doubled backslashes.
+Replace `/Users/you` with your home path. On Windows use `C:\\Users\\you\\.chrome-bridge\\mcp\\server.mjs` with doubled backslashes. If a desktop app cannot find `node`, replace the command with the absolute path from `which node`.
 
 | Client | Where the config goes |
 | --- | --- |

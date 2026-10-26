@@ -172,6 +172,8 @@ Use the standard stdio shape:
 
 If the client asks for a command and arguments separately, use `node` and the absolute path to `mcp/server.mjs`. There is no URL and no port to configure on the client side.
 
+If a desktop client reports that it cannot find `node`, run `which node` in a terminal and use that absolute path as the command. Apps launched from Finder or the Start menu do not always inherit the PATH from your shell, especially with nvm or Homebrew.
+
 ## Environment variables
 
 The MCP server and CLI read:
