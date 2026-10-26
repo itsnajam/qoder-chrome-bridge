@@ -1,0 +1,6 @@
+token
+shots/
+dist/
+extension/config.local.js
+node_modules/
+.DS_Store

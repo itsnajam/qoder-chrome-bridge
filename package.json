@@ -1,0 +1,24 @@
+{
+  "name": "chrome-bridge-for-qoder",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Drive your real Chrome profile from Qoder through a local, token-protected bridge.",
+  "type": "module",
+  "author": "Muhammad Najam Ul Hassan (https://najam.dev)",
+  "license": "MIT",
+  "homepage": "https://najam.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itsnajam/qoder-chrome-bridge.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "token": "node server.mjs --token",
+    "cli": "node cli.mjs",
+    "check": "node scripts/check.mjs",
+    "pack": "node scripts/pack.mjs"
+  }
+}
