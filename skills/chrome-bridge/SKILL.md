@@ -1,12 +1,12 @@
 ---
 name: chrome-bridge
-description: Drive the user's own Google Chrome browser through Chrome Bridge for Qoder. Use when the user asks Qoder to open a site, read a page, click, type, scroll, take a screenshot, or run JavaScript in their Chrome, especially on sites where they are already signed in. Covers installing the bridge, starting it, pairing the extension, and running commands. Built by Muhammad Najam Ul Hassan, https://najam.dev.
-when_to_use: The user asks to do something in their Chrome browser or on a website that needs their real logged-in session, or asks whether Qoder can control Chrome.
+description: Drive the user's own Google Chrome browser through Chrome Bridge. Use when the user asks the agent to open a site, read a page, click, type, scroll, take a screenshot, or run JavaScript in their Chrome, especially on sites where they are already signed in. Covers installing the bridge, starting it, pairing the extension, running commands, and connecting the MCP server. Built by Muhammad Najam Ul Hassan, https://najam.dev.
+when_to_use: The user asks to do something in their Chrome browser or on a website that needs their real logged-in session, or asks whether the agent can control Chrome.
 ---
 
 # Chrome Bridge
 
-Drive the user's real Chrome profile: their logins, cookies, extensions and windows. Chrome Bridge is a local Node server plus a Chrome MV3 extension. Qoder talks to the server on 127.0.0.1, the extension acts on a tab, and nothing leaves the machine.
+Drive the user's real Chrome profile: their logins, cookies, extensions and windows. Chrome Bridge is a local Node server plus a Chrome MV3 extension. The agent talks to the server on 127.0.0.1, either through `cli.mjs` or through `mcp/server.mjs`, the extension acts on a tab, and nothing leaves the machine.
 
 Project: https://github.com/itsnajam/qoder-chrome-bridge
 Built by Muhammad Najam Ul Hassan, https://najam.dev.
@@ -16,8 +16,9 @@ Built by Muhammad Najam Ul Hassan, https://najam.dev.
 Check these locations in order and use the first that contains `server.mjs`:
 
 1. `$CHROME_BRIDGE_DIR`
-2. `~/.qoder/chrome-bridge`
-3. `./chrome-bridge`
+2. `~/.chrome-bridge`
+3. `~/.qoder/chrome-bridge`
+4. `./chrome-bridge`
 
 Then check the connection:
 
@@ -30,7 +31,8 @@ If `extensionConnected` is true, skip to step 3.
 If the bridge is not installed, install it:
 
 ```bash
-git clone https://github.com/itsnajam/qoder-chrome-bridge.git ~/.qoder/chrome-bridge
+git clone https://github.com/itsnajam/qoder-chrome-bridge.git ~/.chrome-bridge
+cd ~/.chrome-bridge && npm install
 ```
 
 If Node.js 20 or newer is missing, ask the user to install it first.
@@ -40,20 +42,22 @@ If Node.js 20 or newer is missing, ask the user to install it first.
 Run the server in the background and keep it running:
 
 ```bash
-cd ~/.qoder/chrome-bridge && node server.mjs
+cd ~/.chrome-bridge && node server.mjs
 ```
 
 Then guide the user through the one-time extension install. Do not ask for their Google password and do not enable Chrome remote debugging.
 
 1. Open `chrome://extensions` in their Chrome.
 2. Turn on Developer mode.
-3. Click Load unpacked and choose `~/.qoder/chrome-bridge/extension`.
-4. Print the token with `node ~/.qoder/chrome-bridge/server.mjs --token`.
+3. Click Load unpacked and choose `~/.chrome-bridge/extension`.
+4. Print the token with `node ~/.chrome-bridge/server.mjs --token`.
 5. Ask the user to open the Chrome Bridge popup and paste that token, then click Save and connect.
 
 Alternatively, if Chrome Bridge is available in the Chrome Web Store, install it there and paste the token in the popup.
 
-Confirm with `node ~/.qoder/chrome-bridge/cli.mjs health` and then `ping`. The ping result includes `pong: true`.
+Confirm with `node ~/.chrome-bridge/cli.mjs health` and then `ping`. The ping result includes `pong: true`.
+
+If this agent supports MCP, you can use `~/.chrome-bridge/mcp/server.mjs` as a stdio MCP server instead of the CLI. The tools are named `chrome_health`, `chrome_snapshot`, `chrome_click` and so on, and map to the commands below.
 
 ## 3. Work in the user's browser
 

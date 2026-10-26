@@ -1,8 +1,8 @@
 {
-  "name": "chrome-bridge-for-qoder",
-  "version": "1.1.0",
+  "name": "chrome-bridge-agent",
+  "version": "1.2.0",
   "private": true,
-  "description": "Drive your real Chrome profile from Qoder through a local, token-protected bridge.",
+  "description": "Drive your real Chrome from any MCP agent through a local, token-protected bridge.",
   "type": "module",
   "author": "Muhammad Najam Ul Hassan (https://najam.dev)",
   "license": "MIT",
@@ -18,7 +18,13 @@
     "start": "node server.mjs",
     "token": "node server.mjs --token",
     "cli": "node cli.mjs",
+    "mcp": "node mcp/server.mjs",
+    "smoke": "node scripts/mcp-smoke.mjs",
     "check": "node scripts/check.mjs",
     "pack": "node scripts/pack.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
   }
 }

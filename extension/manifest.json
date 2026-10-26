@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Chrome Bridge for Qoder",
-  "short_name": "Chrome Bridge",
-  "version": "1.1.0",
-  "description": "Let Qoder drive your real Chrome profile through a local, token-protected bridge. Built by Najam at najam.dev.",
+  "name": "Chrome Bridge by Najam",
+  "short_name": "ChromeBridge",
+  "version": "1.2.0",
+  "description": "Let any MCP agent drive your real Chrome through a local, token-protected bridge. Built by Najam at najam.dev.",
   "homepage_url": "https://najam.dev",
   "minimum_chrome_version": "116",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
@@ -12,7 +12,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Chrome Bridge for Qoder",
+    "default_title": "Chrome Bridge by Najam",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",

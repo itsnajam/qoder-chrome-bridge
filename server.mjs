@@ -228,7 +228,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Chrome Bridge for Qoder listening on http://127.0.0.1:${PORT}`);
+  console.log(`Chrome Bridge listening on http://127.0.0.1:${PORT}`);
   console.log(`Token file: ${path.join(here, "token")} (print it with: node server.mjs --token)`);
   console.log("Built by Muhammad Najam Ul Hassan. Need a website, an app or AI automation? https://najam.dev");
 });

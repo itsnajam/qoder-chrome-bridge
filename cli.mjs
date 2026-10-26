@@ -16,7 +16,7 @@ if (!TOKEN) {
 const PORT = Number(process.env.QCB_PORT || 8791);
 const BRIDGE = `http://127.0.0.1:${PORT}`;
 
-const usage = `Chrome Bridge for Qoder CLI
+const usage = `Chrome Bridge CLI
 
   node cli.mjs health
   node cli.mjs ping
