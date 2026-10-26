@@ -67,6 +67,16 @@ Qoder (shell)  ->  cli.mjs  ->  http://127.0.0.1:8791  ->  Chrome extension  -> 
 
    `ping` should return `"pong": true` and the number of open tabs.
 
+## Use it from Qoder
+
+The repo ships a Qoder skill that tells the agent when to use Chrome and how to install it. Install it once:
+
+```bash
+npx skills add itsnajam/qoder-chrome-bridge --skill chrome-bridge -a qoder
+```
+
+Then ask Qoder something like "Can you open this site in my Chrome and fill the form?" Qoder will check the bridge, help you load the extension, and run the commands.
+
 ## Commands
 
 ```bash
