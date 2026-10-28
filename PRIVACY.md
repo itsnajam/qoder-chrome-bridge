@@ -24,6 +24,7 @@ The extension talks only to `http://127.0.0.1` and `http://localhost`, the loopb
 
 - `tabs`: list and target tabs.
 - `scripting`: read the page structure and perform the actions an agent or local client asks for (click, type, scroll, evaluate).
+- `debugger`: send real mouse and key events to the tab a command names, so menus and keyboard shortcuts that ignore synthetic events still work. The extension attaches, dispatches one click or one key, and detaches in the same command. It does not read the page, the network or the console through the debugger, and nothing the debugger sees is stored.
 - `storage`: remember the bridge token and port.
 - `alarms`: wake the service worker so the connection survives Chrome's idle timeout.
 - Host access to all sites: the tool must work on whichever page you are on. It only acts when a command arrives from your local bridge.

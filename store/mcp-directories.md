@@ -14,9 +14,9 @@ Chrome Bridge lets Qoder, Claude, Cursor, VS Code, Windsurf, Cline, Gemini CLI, 
 
 Most browser automation starts a separate, clean Chrome profile. The sites people actually use need their real session, so they ask for a sign-in again and often block automation.
 
-Chrome Bridge runs inside the Chrome the user already has open. A small Node server on 127.0.0.1 queues commands, a Chrome MV3 extension runs them in the chosen tab, and a stdio MCP server exposes 15 tools to any agent.
+Chrome Bridge runs inside the Chrome the user already has open. A small Node server on 127.0.0.1 queues commands, a Chrome MV3 extension runs them in the chosen tab, and a stdio MCP server exposes 16 tools to any agent.
 
-Tools: `chrome_health`, `chrome_ping`, `chrome_tabs`, `chrome_open`, `chrome_goto`, `chrome_activate`, `chrome_close`, `chrome_snapshot`, `chrome_click`, `chrome_type`, `chrome_press`, `chrome_scroll`, `chrome_wait`, `chrome_screenshot`, `chrome_eval`.
+Tools: `chrome_health`, `chrome_ping`, `chrome_tabs`, `chrome_open`, `chrome_goto`, `chrome_activate`, `chrome_close`, `chrome_snapshot`, `chrome_click`, `chrome_mouse`, `chrome_type`, `chrome_press`, `chrome_scroll`, `chrome_wait`, `chrome_screenshot`, `chrome_eval`.
 
 Security model:
 - The bridge binds 127.0.0.1 only.
@@ -71,7 +71,7 @@ Then publish the package and a root `server.json`:
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.itsnajam/chrome-bridge",
   "description": "Drive the user's real Chrome profile from any MCP agent through a local, token-protected bridge.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "repository": {
     "url": "https://github.com/itsnajam/qoder-chrome-bridge",
     "source": "github"
@@ -80,7 +80,7 @@ Then publish the package and a root `server.json`:
     {
       "registryType": "npm",
       "identifier": "chrome-bridge-agent",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "transport": { "type": "stdio" }
     }
   ]

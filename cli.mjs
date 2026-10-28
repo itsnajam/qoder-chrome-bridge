@@ -27,6 +27,9 @@ const usage = `Chrome Bridge CLI
   node cli.mjs close <tabId>
   node cli.mjs snapshot [tabId] [max]
   node cli.mjs click <ref|selector> [tabId]
+  node cli.mjs mouse <click|move|down|up> <ref|selector> [tabId]
+  node cli.mjs mouse <click|move|down|up> <x> <y> [tabId]
+  node cli.mjs hover <ref|selector> [tabId]
   node cli.mjs type <ref|selector> <text> [tabId] [--submit]
   node cli.mjs press <key> [ref] [tabId]
   node cli.mjs scroll <y> [tabId]
@@ -36,18 +39,21 @@ const usage = `Chrome Bridge CLI
   node cli.mjs eval '<javascript>' [tabId]
   node cli.mjs '{"cmd":"snapshot","tabId":123}'
 
+click, mouse and press send real input events through the debugger, so widgets
+built on mousedown or keyCode respond. They report mode:"synthetic" plus a
+warning when DevTools is open on that tab and the debugger cannot attach.
+Keys are Enter, Escape, Tab, Backspace, Delete, Space, arrows, Home, End,
+PageUp, PageDown, F1-F12, a single character, or a symbol such as # or ?.
+Two numbers after mouse are viewport pixels; use --tab when you mean a ref and
+a tab id. Append --tab <id> to any page command to aim at a background tab.
+
 Set QCB_PORT (and QCB_TOKEN) if the bridge is not on 8791.`;
 
-function parse() {
-  const args = process.argv.slice(2);
-  if (!args.length || args[0] === "help" || args[0] === "--help") {
-    console.log(usage);
-    process.exit(0);
-  }
-  if (args[0].trim().startsWith("{")) return JSON.parse(args[0]);
+const MOUSE_ACTIONS = ["click", "move", "down", "up"];
 
-  const [cmd, ...rest] = args;
+function command([cmd, ...rest]) {
   const isRefOrSelector = (value) => (/^\d+$/.test(value) ? { ref: Number(value) } : { selector: value });
+  const tabAt = (value) => (value ? Number(value) : undefined);
 
   switch (cmd) {
     case "health":
@@ -57,14 +63,26 @@ function parse() {
       return { cmd: cmd === "ping" ? "ping" : "tabs" };
     case "open":
     case "goto":
-      return { cmd, url: rest[0], tabId: rest[1] ? Number(rest[1]) : undefined };
+      return { cmd, url: rest[0], tabId: tabAt(rest[1]) };
     case "activate":
     case "close":
       return { cmd, tabId: Number(rest[0]) };
     case "snapshot":
-      return { cmd, tabId: rest[0] ? Number(rest[0]) : undefined, max: rest[1] ? Number(rest[1]) : undefined };
+      return { cmd, tabId: tabAt(rest[0]), max: rest[1] ? Number(rest[1]) : undefined };
     case "click":
-      return { cmd, ...isRefOrSelector(rest[0]), tabId: rest[1] ? Number(rest[1]) : undefined };
+      return { cmd, ...isRefOrSelector(rest[0]), tabId: tabAt(rest[1]) };
+    case "mouse": {
+      const action = rest[0];
+      if (!MOUSE_ACTIONS.includes(action)) {
+        throw new Error(`mouse needs ${MOUSE_ACTIONS.join("|")}\n\n${usage}`);
+      }
+      const coords = /^-?\d+$/.test(rest[1] ?? "") && /^-?\d+$/.test(rest[2] ?? "");
+      return coords
+        ? { cmd, action, x: Number(rest[1]), y: Number(rest[2]), tabId: tabAt(rest[3]) }
+        : { cmd, action, ...isRefOrSelector(rest[1]), tabId: tabAt(rest[2]) };
+    }
+    case "hover":
+      return { cmd: "mouse", action: "move", ...isRefOrSelector(rest[0]), tabId: tabAt(rest[1]) };
     case "type":
       return {
         cmd,
@@ -79,10 +97,10 @@ function parse() {
         key: rest[0] || "Enter",
         ...(rest[1] && /^\d+$/.test(rest[1]) ? { ref: Number(rest[1]) } : {}),
         ...(rest[1] && !/^\d+$/.test(rest[1]) ? { selector: rest[1] } : {}),
-        tabId: rest[2] ? Number(rest[2]) : undefined,
+        tabId: tabAt(rest[2]),
       };
     case "scroll":
-      return { cmd, y: Number(rest[0] || 600), tabId: rest[1] ? Number(rest[1]) : undefined };
+      return { cmd, y: Number(rest[0] || 600), tabId: tabAt(rest[1]) };
     case "wait":
       if (rest[0] === "--selector") {
         if (!rest[1]) throw new Error(`wait --selector needs a CSS selector\n\n${usage}`);
@@ -95,12 +113,32 @@ function parse() {
       }
       return { cmd, ms: Number(rest[0] || 1000) };
     case "screenshot":
-      return { cmd, tabId: rest[0] ? Number(rest[0]) : undefined };
+      return { cmd, tabId: tabAt(rest[0]) };
     case "eval":
-      return { cmd, code: rest[0], tabId: rest[1] ? Number(rest[1]) : undefined };
+      return { cmd, code: rest[0], tabId: tabAt(rest[1]) };
     default:
       throw new Error(`unknown command: ${cmd}\n\n${usage}`);
   }
+}
+
+function parse() {
+  const args = process.argv.slice(2);
+  if (!args.length || args[0] === "help" || args[0] === "--help") {
+    console.log(usage);
+    process.exit(0);
+  }
+  if (args[0].trim().startsWith("{")) return JSON.parse(args[0]);
+
+  const flagIndex = args.indexOf("--tab");
+  let explicitTab;
+  if (flagIndex >= 0) {
+    explicitTab = Number(args[flagIndex + 1]);
+    if (!Number.isInteger(explicitTab)) throw new Error(`--tab needs a tab id\n\n${usage}`);
+    args.splice(flagIndex, 2);
+  }
+  const payload = command(args);
+  if (explicitTab !== undefined) payload.tabId = explicitTab;
+  return payload;
 }
 
 async function main() {

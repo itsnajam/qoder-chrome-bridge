@@ -87,12 +87,13 @@ function screenshotResult(body) {
 }
 
 const server = new McpServer(
-  { name: "chrome-bridge", version: "1.2.0" },
+  { name: "chrome-bridge", version: "1.3.0" },
   {
     instructions: [
       "Chrome Bridge drives the user's real Google Chrome through a local, token-protected bridge and an extension the user installs.",
       "Workflow: call chrome_tabs or chrome_snapshot to see the page, then act with refs from the latest snapshot (refs are invalidated when the page changes).",
       "Call chrome_snapshot again after navigation, clicks that change the page, or form submissions.",
+      "chrome_click, chrome_press and chrome_mouse send trusted input through the Chrome debugger. If a result reports mode:synthetic, DevTools is open on that tab and the page only saw a plain click or a keyCode-less key event.",
       "Screenshots need the tab to be visible; chrome_screenshot activates the tab first.",
       "Never enter passwords, payment details, or one-time codes unless the user explicitly asks you to do it in this session.",
       "If chrome_health reports extensionConnected false, explain that the bridge server and the Chrome extension must both be running and paired.",
@@ -228,7 +229,8 @@ server.registerTool(
   "chrome_click",
   {
     title: "Click an element",
-    description: "Click an element by snapshot ref or CSS selector. Snapshot again afterwards if the page changes.",
+    description:
+      'Send a real mouse click to an element by snapshot ref or CSS selector, through the Chrome debugger, so menus and widgets bound to mousedown or pointerdown respond. Reports mode:"synthetic" with a warning if DevTools is open on the tab and only plain click handlers ran. Snapshot again afterwards if the page changes.',
     inputSchema: {
       ref: z.number().int().optional().describe("Element number from the latest chrome_snapshot."),
       selector: z.string().optional().describe("CSS selector, used instead of ref."),
@@ -237,6 +239,26 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
   async ({ ref, selector, tabId }) => result(await callBridge({ cmd: "click", ref, selector, tabId })),
+);
+
+server.registerTool(
+  "chrome_mouse",
+  {
+    title: "Real mouse input",
+    description:
+      "Send trusted mouse events at raw viewport coordinates or at a snapshot ref / CSS selector. Use action move to hover open menus, down and up to hold a control, and click for a normal press and release.",
+    inputSchema: {
+      action: z.enum(["click", "move", "down", "up"]).describe("Mouse event to send."),
+      x: z.number().int().optional().describe("Viewport x in CSS pixels. Needs y. Ignored when ref or selector is given."),
+      y: z.number().int().optional().describe("Viewport y in CSS pixels."),
+      ref: z.number().int().optional().describe("Element number from the latest chrome_snapshot; the click lands on its centre."),
+      selector: z.string().optional().describe("CSS selector used instead of ref."),
+      tabId: z.number().int().optional().describe("Tab id. Defaults to the active tab."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  async ({ action, x, y, ref, selector, tabId }) =>
+    result(await callBridge({ cmd: "mouse", action, x, y, ref, selector, tabId })),
 );
 
 server.registerTool(
@@ -263,9 +285,12 @@ server.registerTool(
   {
     title: "Press a key",
     description:
-      "Dispatch a keyboard event to an element, or to the focused element when no ref or selector is given. Enter also submits the closest form. Reach for chrome_type with submit for text fields.",
+      "Send a real key down and up through the Chrome debugger, with the virtual key code the page expects, so keyboard shortcuts such as Gmail's # work. Give a ref or selector to focus that element first, or omit both for the focused element. Enter also submits the closest form. Reports mode:\"synthetic\" if the debugger could not attach.",
     inputSchema: {
-      key: z.string().min(1).describe("Key name such as Enter, Escape, Tab, ArrowDown, or a single character."),
+      key: z
+        .string()
+        .min(1)
+        .describe("Key name: Enter, Escape, Tab, Backspace, Delete, Space, ArrowUp, Home, PageDown, F5, or a single character such as a, 7 or #."),
       ref: z.number().int().optional().describe("Element number from the latest chrome_snapshot."),
       selector: z.string().optional().describe("CSS selector, used instead of ref."),
       tabId: z.number().int().optional().describe("Tab id. Defaults to the active tab."),

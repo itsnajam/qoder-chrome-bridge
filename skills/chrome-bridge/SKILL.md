@@ -66,6 +66,9 @@ Always take a snapshot before acting, then use the numbered refs:
 ```bash
 node <dir>/cli.mjs snapshot [tabId] [max]
 node <dir>/cli.mjs click <ref|selector> [tabId]
+node <dir>/cli.mjs mouse <click|move|down|up> <ref|selector> [tabId]
+node <dir>/cli.mjs mouse <click|move|down|up> <x> <y> [tabId]
+node <dir>/cli.mjs hover <ref|selector> [tabId]
 node <dir>/cli.mjs type <ref|selector> <text> [tabId] [--submit]
 node <dir>/cli.mjs press <key> [ref] [tabId]
 node <dir>/cli.mjs scroll <y> [tabId]
@@ -81,6 +84,8 @@ node <dir>/cli.mjs tabs
 ```
 
 - Refs expire on the next snapshot or navigation. Take a fresh snapshot after the page changes.
+- `click`, `mouse` and `press` send real input events through the Chrome debugger, so menus bound to `mousedown` and shortcuts that read `keyCode` work. Add `--tab <id>` to aim at a background tab; two numbers after `mouse` are viewport pixels, not a ref and a tab id.
+- If a result reports `mode:"synthetic"`, DevTools was open on that tab and the page only saw a plain `el.click()` or a key event with no `keyCode`. Close DevTools and repeat the command.
 - `type` fires `input` and `change`, so React and Vue forms see it.
 - Prefer `snapshot` over `eval` for reading pages and choosing elements.
 - Verify the result after an action: snapshot again, read the changed state, or take a screenshot when visual confirmation matters.

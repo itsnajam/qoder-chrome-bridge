@@ -23,7 +23,7 @@ Shell or Qoder      ->  cli.mjs         ->  http://127.0.0.1:8791  ->  Chrome ex
 ```
 
 - `server.mjs`: a localhost-only HTTP bridge with a command queue and long polling. Binds `127.0.0.1`, and every request needs the pairing token.
-- `mcp/server.mjs`: a stdio MCP server that exposes the bridge as 15 tools. Any MCP client can use it.
+- `mcp/server.mjs`: a stdio MCP server that exposes the bridge as 16 tools. Any MCP client can use it.
 - `cli.mjs`: the command line for shells and agents that do not speak MCP.
 - `extension/`: a Manifest V3 extension. It polls the bridge, runs the command and posts the result back.
 - `token`: the shared secret, created on first run (`chmod 600`) and kept out of git and the packaged extension.
@@ -126,15 +126,18 @@ Then ask Qoder something like "Can you open this site in my Chrome and fill the 
 | `chrome_activate` | Focus a tab and its window |
 | `chrome_close` | Close a tab |
 | `chrome_snapshot` | Page text plus numbered interactive elements |
-| `chrome_click` | Click by snapshot ref or CSS selector |
+| `chrome_click` | Real mouse click on a snapshot ref or CSS selector |
+| `chrome_mouse` | Trusted move, down, up or click at coordinates or an element |
 | `chrome_type` | Set a field value, optional form submit |
-| `chrome_press` | Dispatch a key event |
+| `chrome_press` | Real key event with the code the page expects |
 | `chrome_scroll` | Scroll the page or an element into view |
 | `chrome_wait` | Wait a duration or for a selector |
 | `chrome_screenshot` | PNG of the visible tab, returned as an image |
 | `chrome_eval` | Run JavaScript in the page's main world |
 
 `chrome_snapshot` numbers the elements it can see and writes `data-qcb-ref` on them. Refs stay valid until the next snapshot or navigation. Take a fresh snapshot after clicks that change the page.
+
+`chrome_click`, `chrome_press` and `chrome_mouse` attach the Chrome debugger to the target tab, send the event through `Input.dispatchMouseEvent` or `Input.dispatchKeyEvent`, and detach again. That means menus and widgets built on `mousedown` or `pointerdown` open, and shortcuts read the real `keyCode`: Gmail's `#` delete and Slack's per-message kebab both work. While attached, Chrome shows its "being debugged" banner. If the debugger cannot attach, because DevTools is already open on that tab, the command falls back to a synthetic event and reports `mode:"synthetic"` with a warning.
 
 ## CLI
 
@@ -147,7 +150,10 @@ node cli.mjs goto <url> [tabId]
 node cli.mjs activate <tabId>
 node cli.mjs close <tabId>
 node cli.mjs snapshot [tabId] [max]            # numbered, visible elements plus page text
-node cli.mjs click <ref|selector> [tabId]
+node cli.mjs click <ref|selector> [tabId]      # trusted click on the element centre
+node cli.mjs mouse <click|move|down|up> <ref|selector> [tabId]
+node cli.mjs mouse <click|move|down|up> <x> <y> [tabId]
+node cli.mjs hover <ref|selector> [tabId]      # move the pointer without clicking
 node cli.mjs type <ref|selector> <text> [tabId] [--submit]
 node cli.mjs press <key> [ref] [tabId]
 node cli.mjs scroll <y> [tabId]
@@ -159,7 +165,9 @@ node cli.mjs '{"cmd":"snapshot","tabId":123}'  # raw command
 ```
 
 - `type` sets the field value and fires `input` and `change`, so React and Vue forms see it. Add `--submit` to submit the surrounding form.
-- `press Enter` also submits the field's form, since synthetic key events do not trigger native submission.
+- `press` takes `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Space`, `ArrowUp`, `Home`, `PageDown`, `F5`, a single letter or digit, or a symbol such as `#`. Uppercase letters and shifted symbols carry the shift modifier.
+- `click` and `press` run on the focused element when you give no ref. To aim at a background tab without a ref, add `--tab <id>` to any page command.
+- Two numbers after `mouse` are viewport pixels. If you mean a snapshot ref plus a tab id, write `node cli.mjs mouse click 44 --tab 211439585`.
 - `screenshot` captures the visible viewport as a PNG.
 
 Set `QCB_PORT` (default `8791`) and `QCB_TOKEN` (default: the `token` file) if your setup differs. The MCP server reads the same variables.
@@ -172,6 +180,7 @@ This tool can do anything you can do in Chrome. Treat it accordingly.
 - Every request carries the token. The server rejects requests without it, and cross-origin requests from web pages are refused.
 - The token is created locally and never leaves your machine. It is not in the extension package.
 - The extension has host access to all sites because it must work on whichever page you are on. It only acts when a command arrives from your local bridge.
+- The `debugger` permission is used only to send real mouse and key events to the tab a command names, and it detaches as soon as that command finishes. It is not used to read the page or to inspect your network.
 - Only run the server while you need it. To revoke access, stop the server, remove the extension, or rotate the token.
 
 Do not expose port `8791` through a tunnel, reverse proxy or firewall rule. A public tunnel would let anyone who finds the URL drive your browser.
@@ -184,12 +193,16 @@ Do not expose port `8791` through a tunnel, reverse proxy or firewall rule. A pu
 - **`element not found`:** take a fresh snapshot. Refs expire on navigation.
 - **`chrome://` pages:** Chrome blocks extensions from scripting its own pages. Use a normal page.
 - **Screenshot fails with `activeTab`:** the bridge must capture an HTTP or HTTPS page. `chrome://` pages cannot be captured.
+- **A click or key reports `mode:"synthetic"`:** DevTools is open on that tab, so the debugger could not attach. Close DevTools and repeat the command.
+- **"Chrome is being debugged by software on your machine" banner:** that is a trusted mouse or key command. It disappears when the command finishes.
 
 ## Limitations
 
 - No `chrome://` pages, cross-origin iframes, or shadow DOM inside shadow DOM.
 - Screenshots capture the visible viewport, not the full page.
 - File uploads and native dialogs are not supported yet.
+- Drag and drop needs a continuous pointer, so it is not supported. Each trusted mouse event is a separate command.
+- Trusted clicks and keys need the debugger, so they fall back to synthetic events while DevTools is open on the same tab.
 - Commands run one at a time, up to 40 seconds each.
 - The extension does not load or run remote code.
 - ChatGPT desktop and web cannot connect to a local-only server. Use Codex CLI or the Codex IDE extension.

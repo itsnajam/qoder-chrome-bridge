@@ -3,12 +3,14 @@
 ## How to submit
 
 1. Register a Chrome Web Store developer account at https://chrome.google.com/webstore/devconsole/register (one-time 5 USD fee).
-2. Click **New item** and upload `dist/chrome-bridge-1.2.0.zip`.
+2. Click **New item** and upload `dist/chrome-bridge-1.3.0.zip`.
 3. Fill the listing from the sections below.
 4. Upload `extension/icons/icon-128.png` and `store/assets/screenshot-1.png`.
 5. Add the privacy policy URL and submit for review.
 
 Chrome blocks extensions from scripting `chrome.google.com/webstore`, so these steps must be done by hand in the dashboard.
+
+`debugger` is a sensitive permission, so the store shows an extra warning at install and the review team reads the justification. If Google rejects it, drop the permission and the extension still works; clicks and keys fall back to synthetic events.
 
 ## Name
 
@@ -30,7 +32,7 @@ English (United Kingdom)
 
 Drive your real Chrome profile from Qoder, Claude, Cursor, VS Code, Windsurf, Cline, Gemini CLI, Codex or any MCP client, with your logins and windows, instead of a clean test profile.
 
-Chrome Bridge connects a local agent to the Chrome you already use through a small server that runs on your own computer. The agent can open tabs, read a page, click, type, scroll, wait for elements and take screenshots. Sites that need a real session stop asking you to sign in again.
+Chrome Bridge connects a local agent to the Chrome you already use through a small server that runs on your own computer. The agent can open tabs, read a page, click, type, scroll, wait for elements and take screenshots. Clicks and keys are delivered as real input events, so menus and keyboard shortcuts behave the way they do when you use the page. Sites that need a real session stop asking you to sign in again.
 
 How it works:
 1. Run the local bridge (Node.js, included in the project).
@@ -59,6 +61,7 @@ Connect a local automation client to the user's own Chrome browser so it can rea
 
 - **tabs**: list open tabs and target the tab a command names.
 - **scripting**: read the page structure and perform the requested action (click, type, scroll, evaluate).
+- **debugger**: deliver one real mouse or key event to the tab a command names, for pages that ignore synthetic events. The extension attaches, calls `Input.dispatchMouseEvent` or `Input.dispatchKeyEvent` once, and detaches before the command ends. It never reads through the debugger, and Chrome shows its debugging banner while attached.
 - **storage**: remember the local bridge token and port.
 - **alarms**: wake the service worker so the connection survives Chrome's idle timeout.
 - **Host permission, all sites**: the client must work on whichever site the user is on. The extension only acts when a command arrives from the local bridge, and no page data leaves the computer.

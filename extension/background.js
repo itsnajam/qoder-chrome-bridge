@@ -150,6 +150,196 @@ function pageScroll(y, ref) {
   return { ok: true, scrollY: Math.round(window.scrollY) };
 }
 
+function pageFocusTarget(ref, selector) {
+  const el = selector ? document.querySelector(selector) : document.querySelector(`[data-qcb-ref="${ref}"]`);
+  if (!el) return { ok: false, error: "element not found" };
+  el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  if (typeof el.focus === "function") el.focus();
+  return { ok: true, tag: el.tagName.toLowerCase() };
+}
+
+// Viewport centre of the target, in CSS pixels, ready for CDP Input.dispatch*MouseEvent.
+function pageTargetPoint(ref, selector) {
+  const el = selector ? document.querySelector(selector) : document.querySelector(`[data-qcb-ref="${ref}"]`);
+  if (!el) return { ok: false, error: "element not found" };
+  el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return { ok: false, error: "element has no visible box" };
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
+    return { ok: false, error: `element centre (${Math.round(x)}, ${Math.round(y)}) is outside the viewport` };
+  }
+  if (typeof el.focus === "function") el.focus();
+  return {
+    ok: true,
+    x: Math.round(x),
+    y: Math.round(y),
+    tag: el.tagName.toLowerCase(),
+    text: String(el.innerText || el.value || "").replace(/\s+/g, " ").trim().slice(0, 120),
+  };
+}
+
+const CDP_PROTOCOL = "1.3";
+
+function attachError(e) {
+  return String(e?.message || e);
+}
+
+// Real input events need chrome.debugger. DevTools open on the same tab, or a
+// chrome:// page, blocks the attach; callers fall back to synthetic events then.
+async function withDebugger(tabId, fn) {
+  const target = { tabId };
+  let attachedHere = false;
+  try {
+    await chrome.debugger.attach(target, CDP_PROTOCOL);
+    attachedHere = true;
+  } catch (e) {
+    const message = attachError(e);
+    if (!message.includes("Already attached")) throw new Error(`debugger attach failed: ${message}`);
+  }
+  try {
+    return await fn((method, params) => chrome.debugger.sendCommand(target, method, params));
+  } finally {
+    if (attachedHere) await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+const MOUSE_STEPS = {
+  move: [{ type: "mouseMoved", button: "none" }],
+  down: [{ type: "mousePressed", button: "left", clickCount: 1, buttons: 1 }],
+  up: [{ type: "mouseReleased", button: "left", clickCount: 1, buttons: 0 }],
+  click: [
+    { type: "mouseMoved", button: "none" },
+    { type: "mousePressed", button: "left", clickCount: 1, buttons: 1 },
+    { type: "mouseReleased", button: "left", clickCount: 1, buttons: 0 },
+  ],
+};
+
+async function sendMouse(send, action, x, y) {
+  const steps = MOUSE_STEPS[action];
+  if (!steps) throw new Error(`unknown mouse action: ${action}`);
+  for (const step of steps) await send("Input.dispatchMouseEvent", { ...step, x, y });
+}
+
+const NAMED_KEYS = {
+  backspace: ["Backspace", "Backspace", 8],
+  tab: ["Tab", "Tab", 9, "\t"],
+  enter: ["Enter", "Enter", 13, "\r"],
+  return: ["Enter", "Enter", 13, "\r"],
+  escape: ["Escape", "Escape", 27],
+  esc: ["Escape", "Escape", 27],
+  space: [" ", "Space", 32, " "],
+  spacebar: [" ", "Space", 32, " "],
+  delete: ["Delete", "Delete", 46],
+  del: ["Delete", "Delete", 46],
+  insert: ["Insert", "Insert", 45],
+  home: ["Home", "Home", 36],
+  end: ["End", "End", 35],
+  pageup: ["PageUp", "PageUp", 33],
+  pagedown: ["PageDown", "PageDown", 34],
+  up: ["ArrowUp", "ArrowUp", 38],
+  arrowup: ["ArrowUp", "ArrowUp", 38],
+  down: ["ArrowDown", "ArrowDown", 40],
+  arrowdown: ["ArrowDown", "ArrowDown", 40],
+  left: ["ArrowLeft", "ArrowLeft", 37],
+  arrowleft: ["ArrowLeft", "ArrowLeft", 37],
+  right: ["ArrowRight", "ArrowRight", 39],
+  arrowright: ["ArrowRight", "ArrowRight", 39],
+  capslock: ["CapsLock", "CapsLock", 20],
+  control: ["Control", "ControlLeft", 17],
+  ctrl: ["Control", "ControlLeft", 17],
+  alt: ["Alt", "AltLeft", 18],
+  option: ["Alt", "AltLeft", 18],
+  shift: ["Shift", "ShiftLeft", 16],
+  meta: ["Meta", "MetaLeft", 91],
+  cmd: ["Meta", "MetaLeft", 91],
+  command: ["Meta", "MetaLeft", 91],
+};
+
+// Shifted symbols carry their own virtual key code, so Gmail's "# delete" and
+// similar shortcuts see the code they actually check.
+const SHIFTED_KEYS = {
+  "!": ["Digit1", 49],
+  "@": ["Digit2", 50],
+  "#": ["Digit3", 51],
+  $: ["Digit4", 52],
+  "%": ["Digit5", 53],
+  "^": ["Digit6", 54],
+  "&": ["Digit7", 55],
+  "*": ["Digit8", 56],
+  "(": ["Digit9", 57],
+  ")": ["Digit0", 48],
+  _: ["Minus", 189],
+  "+": ["Equal", 187],
+  "{": ["BracketLeft", 219],
+  "}": ["BracketRight", 221],
+  "|": ["Backslash", 220],
+  ":": ["Semicolon", 186],
+  '"': ["Quote", 222],
+  "<": ["Comma", 188],
+  ">": ["Period", 190],
+  "?": ["Slash", 191],
+  "~": ["Backquote", 192],
+};
+
+const PLAIN_KEYS = {
+  "-": ["Minus", 189],
+  "=": ["Equal", 187],
+  "[": ["BracketLeft", 219],
+  "]": ["BracketRight", 221],
+  "\\": ["Backslash", 220],
+  ";": ["Semicolon", 186],
+  "'": ["Quote", 222],
+  ",": ["Comma", 188],
+  ".": ["Period", 190],
+  "/": ["Slash", 191],
+  "`": ["Backquote", 192],
+};
+
+function keyDescriptor(name) {
+  const raw = String(name ?? "");
+  const named = NAMED_KEYS[raw.toLowerCase()];
+  if (named) return { key: named[0], code: named[1], vk: named[2], text: named[3] };
+  const fn = /^f([1-9]|1[0-2])$/.exec(raw.toLowerCase());
+  if (fn) {
+    const label = `F${fn[1]}`;
+    return { key: label, code: label, vk: 111 + Number(fn[1]) };
+  }
+  if ([...raw].length !== 1) return null;
+  if (/^[a-z]$/i.test(raw)) {
+    const upper = raw.toUpperCase();
+    return { key: raw, code: `Key${upper}`, vk: upper.charCodeAt(0), text: raw, shift: raw === upper };
+  }
+  if (/^[0-9]$/.test(raw)) return { key: raw, code: `Digit${raw}`, vk: 48 + Number(raw), text: raw };
+  const shifted = SHIFTED_KEYS[raw];
+  if (shifted) return { key: raw, code: shifted[0], vk: shifted[1], text: raw, shift: true };
+  const plain = PLAIN_KEYS[raw];
+  if (plain) return { key: raw, code: plain[0], vk: plain[1], text: raw };
+  return null;
+}
+
+async function sendKey(send, desc) {
+  const base = {
+    key: desc.key,
+    code: desc.code,
+    windowsVirtualKeyCode: desc.vk,
+    nativeVirtualKeyCode: desc.vk,
+    modifiers: desc.shift ? 8 : 0,
+  };
+  await send("Input.dispatchKeyEvent", { ...base, type: "keyDown", ...(desc.text ? { text: desc.text } : {}) });
+  await send("Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+}
+
+async function targetPoint(tabId, cmd) {
+  const [out] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: pageTargetPoint,
+    args: [cmd.ref ?? null, cmd.selector ?? null],
+  });
+  return out?.result || { ok: false, error: "element lookup returned no result" };
+}
+
 async function run(cmd) {
   const tabId = cmd.tabId ?? (await activeTabId());
   switch (cmd.cmd) {
@@ -197,12 +387,38 @@ async function run(cmd) {
     }
     case "click": {
       if (!tabId) throw new Error("no tab");
-      const [out] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: pageClick,
-        args: [cmd.ref ?? null, cmd.selector ?? null],
-      });
-      return { ...out.result, tabId };
+      const point = await targetPoint(tabId, cmd);
+      if (!point.ok) return { ...point, tabId };
+      try {
+        await withDebugger(tabId, (send) => sendMouse(send, "click", point.x, point.y));
+        return { ok: true, mode: "trusted", tabId, ...point };
+      } catch (e) {
+        const [out] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: pageClick,
+          args: [cmd.ref ?? null, cmd.selector ?? null],
+        });
+        return { ...out.result, tabId, mode: "synthetic", warning: `${attachError(e)}; used el.click() instead` };
+      }
+    }
+    case "mouse": {
+      if (!tabId) throw new Error("no tab");
+      const action = cmd.action ?? "click";
+      if (!MOUSE_STEPS[action]) return { ok: false, error: `unknown mouse action: ${action}`, tabId };
+      let { x, y } = cmd;
+      let detail = {};
+      if (cmd.ref != null || cmd.selector) {
+        const point = await targetPoint(tabId, cmd);
+        if (!point.ok) return { ...point, tabId };
+        x = point.x;
+        y = point.y;
+        detail = { tag: point.tag, text: point.text };
+      }
+      x = Math.round(Number(x));
+      y = Math.round(Number(y));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("mouse needs x and y, or a ref/selector");
+      await withDebugger(tabId, (send) => sendMouse(send, action, x, y));
+      return { ok: true, mode: "trusted", tabId, action, x, y, ...detail };
     }
     case "type": {
       if (!tabId) throw new Error("no tab");
@@ -215,12 +431,30 @@ async function run(cmd) {
     }
     case "press": {
       if (!tabId) throw new Error("no tab");
-      const [out] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: pagePress,
-        args: [cmd.ref ?? null, cmd.selector ?? null, cmd.key || "Enter"],
-      });
-      return { ...out.result, tabId };
+      const key = cmd.key || "Enter";
+      const desc = keyDescriptor(key);
+      if (!desc) return { ok: false, error: `unknown key: ${key}`, tabId };
+      let focused;
+      if (cmd.ref != null || cmd.selector) {
+        const [out] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: pageFocusTarget,
+          args: [cmd.ref ?? null, cmd.selector ?? null],
+        });
+        if (!out?.result?.ok) return { ...(out?.result || { ok: false, error: "element lookup returned no result" }), tabId };
+        focused = { tag: out.result.tag };
+      }
+      try {
+        await withDebugger(tabId, (send) => sendKey(send, desc));
+        return { ok: true, mode: "trusted", tabId, key, code: desc.code, keyCode: desc.vk, ...focused };
+      } catch (e) {
+        const [out] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: pagePress,
+          args: [cmd.ref ?? null, cmd.selector ?? null, key],
+        });
+        return { ...out.result, tabId, mode: "synthetic", warning: `${attachError(e)}; used a synthetic KeyboardEvent instead` };
+      }
     }
     case "scroll": {
       if (!tabId) throw new Error("no tab");
