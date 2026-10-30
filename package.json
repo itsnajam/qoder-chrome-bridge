@@ -1,6 +1,6 @@
 {
   "name": "chrome-bridge-agent",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Drive your real Chrome from any MCP agent through a local, token-protected bridge.",
   "type": "module",

@@ -21,11 +21,11 @@ const PAGE = `<!doctype html>
   <p id="late">late content</p>
   <script>
     setTimeout(() => document.getElementById('late').setAttribute('data-ready', '1'), 600);
-    document.getElementById('pad').addEventListener('pointerdown', () => {
-      document.getElementById('padout').textContent = 'pointerdown seen';
+    document.getElementById('pad').addEventListener('pointerdown', (e) => {
+      document.getElementById('padout').textContent = 'pointerdown seen, trusted ' + e.isTrusted;
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === '#') document.getElementById('keyout').textContent = 'hash keydown, keyCode ' + e.keyCode;
+      if (e.key === '#') document.getElementById('keyout').textContent = 'hash keydown, keyCode ' + e.keyCode + ', trusted ' + e.isTrusted;
     });
   </script>
 </body></html>`;
@@ -77,19 +77,23 @@ try {
   if (buttonRef) await call("chrome_click", { tabId, ref: Number(buttonRef) });
   const padClicked = await call("chrome_click", { tabId, selector: "#pad" });
   const pressed = await call("chrome_press", { tabId, key: "#" });
-  const seen = parse(
-    await call("chrome_eval", { tabId, code: "document.getElementById('padout').textContent + ' | ' + document.getElementById('keyout').textContent" }),
-  ).value;
-  await call("chrome_screenshot", { tabId });
+  const padSeen = parse(await call("chrome_eval", { tabId, code: "document.getElementById('padout').textContent" })).value;
+  const keySeen = parse(await call("chrome_eval", { tabId, code: "document.getElementById('keyout').textContent" })).value;
+  const shot = await call("chrome_screenshot", { tabId });
 
   const trusted = [parse(clicked).mode, parse(hovered).mode, parse(padClicked).mode, parse(pressed).mode].filter((m) => m === "trusted").length;
   console.log(`\nTrusted input: ${trusted}/4 events went through the debugger.`);
-  console.log(`Page saw: ${seen}`);
+  console.log(`Page saw: ${padSeen} | ${keySeen}`);
   if (!trusted) {
     console.log("Chrome refused the debugger attach, usually because DevTools is open on this tab, so the page only saw synthetic events.");
-  } else if (!seen.includes("pointerdown seen") || !seen.includes("hash keydown")) {
+  } else if (padSeen !== "pointerdown seen, trusted true" || !keySeen.startsWith("hash keydown, keyCode 51, trusted true")) {
     failures += 1;
-    console.log("A trusted event never reached the page's pointerdown or keydown listener.");
+    console.log("A trusted event did not reach the page's pointerdown or keydown listener.");
+  }
+  const shotMode = parse(shot).mode;
+  if (shotMode !== "background") {
+    failures += 1;
+    console.log(`Screenshot used mode "${shotMode}"; the smoke tab should have stayed in the background.`);
   }
 } finally {
   await call("chrome_close", { tabId });

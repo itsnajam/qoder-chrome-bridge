@@ -205,6 +205,36 @@ async function withDebugger(tabId, fn) {
   }
 }
 
+// Renderer-side capture, so a tab that is not on screen still produces a real
+// frame. captureBeyondViewport forces a paint even when the tab was never shown.
+async function captureThroughDebugger(tabId) {
+  return withDebugger(tabId, async (send) => {
+    let data;
+    try {
+      ({ data } = await send("Page.captureScreenshot", { format: "png", fromSurface: true }));
+    } catch {
+      ({ data } = await send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: true }));
+    }
+    if (!data) throw new Error("empty screenshot");
+    return `data:image/png;base64,${data}`;
+  });
+}
+
+// A tab that is not on screen is treated as unfocused, and Chrome drops key and
+// press/release input for it. Focus emulation makes the renderer accept them.
+async function withInput(tabId, fn) {
+  return withDebugger(tabId, async (send) => {
+    await send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+    try {
+      return await fn(send);
+    } finally {
+      // Chrome keeps document.hasFocus() true until the next navigation, so this
+      // is best effort; it still stops the emulation carrying into later commands.
+      await send("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
+    }
+  });
+}
+
 const MOUSE_STEPS = {
   move: [{ type: "mouseMoved", button: "none" }],
   down: [{ type: "mousePressed", button: "left", clickCount: 1, buttons: 1 }],
@@ -354,7 +384,9 @@ async function run(cmd) {
     }
     case "open": {
       if (!cmd.url) throw new Error("url required");
-      const tab = await chrome.tabs.create({ url: cmd.url, active: cmd.active !== false });
+      // Background by default: an agent opening pages should not pull the user
+      // away from whatever they are doing. Pass active:true to bring it forward.
+      const tab = await chrome.tabs.create({ url: cmd.url, active: cmd.active === true });
       const loaded = await waitForLoad(tab.id, cmd.timeout);
       return { ok: true, tab: { id: loaded.id, url: loaded.url, title: loaded.title, status: loaded.status } };
     }
@@ -390,7 +422,7 @@ async function run(cmd) {
       const point = await targetPoint(tabId, cmd);
       if (!point.ok) return { ...point, tabId };
       try {
-        await withDebugger(tabId, (send) => sendMouse(send, "click", point.x, point.y));
+        await withInput(tabId, (send) => sendMouse(send, "click", point.x, point.y));
         return { ok: true, mode: "trusted", tabId, ...point };
       } catch (e) {
         const [out] = await chrome.scripting.executeScript({
@@ -417,7 +449,7 @@ async function run(cmd) {
       x = Math.round(Number(x));
       y = Math.round(Number(y));
       if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("mouse needs x and y, or a ref/selector");
-      await withDebugger(tabId, (send) => sendMouse(send, action, x, y));
+      await withInput(tabId, (send) => sendMouse(send, action, x, y));
       return { ok: true, mode: "trusted", tabId, action, x, y, ...detail };
     }
     case "type": {
@@ -445,7 +477,7 @@ async function run(cmd) {
         focused = { tag: out.result.tag };
       }
       try {
-        await withDebugger(tabId, (send) => sendKey(send, desc));
+        await withInput(tabId, (send) => sendKey(send, desc));
         return { ok: true, mode: "trusted", tabId, key, code: desc.code, keyCode: desc.vk, ...focused };
       } catch (e) {
         const [out] = await chrome.scripting.executeScript({
@@ -504,11 +536,30 @@ async function run(cmd) {
     case "screenshot": {
       if (!tabId) throw new Error("no tab");
       const tab = await chrome.tabs.get(tabId);
-      if (!tab.active) await chrome.tabs.update(tabId, { active: true });
+
+      // captureVisibleTab already covers the common case and avoids the debugger
+      // infobar. It never focuses the window.
+      if (tab.active) {
+        try {
+          const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+          return { ok: true, tabId, dataUrl, mode: "visible" };
+        } catch {}
+      }
+
+      // A background tab has no visible surface, so capture it through the
+      // debugger. This is what keeps the user's screen where it is.
+      try {
+        const dataUrl = await captureThroughDebugger(tabId);
+        return { ok: true, tabId, dataUrl, mode: "background" };
+      } catch {}
+
+      // Last resort, and the only path that changes what the user is looking
+      // at: a minimized window or a page the debugger cannot attach to.
+      await chrome.tabs.update(tabId, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
       await sleep(200);
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-      return { ok: true, tabId, dataUrl };
+      return { ok: true, tabId, dataUrl, mode: "focused" };
     }
     default:
       return { ok: false, error: `unknown command: ${cmd.cmd}` };

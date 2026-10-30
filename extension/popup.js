@@ -1,6 +1,10 @@
 const $ = (id) => document.getElementById(id);
 const DEFAULT_PORT = 8791;
 
+// Opening popup.html#reload restarts the extension, so an edited background.js
+// takes effect without opening chrome://extensions. Useful while developing.
+if (location.hash === "#reload") chrome.runtime.reload();
+
 function render(state) {
   const on = !!state?.connected;
   $("dot").classList.toggle("on", on);

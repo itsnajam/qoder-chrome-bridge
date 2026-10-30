@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Chrome Bridge by Najam",
   "short_name": "ChromeBridge",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Let any MCP agent drive your real Chrome through a local, token-protected bridge. Built by Najam at najam.dev.",
   "homepage_url": "https://najam.dev",
   "minimum_chrome_version": "116",

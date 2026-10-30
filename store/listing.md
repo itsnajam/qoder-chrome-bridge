@@ -3,7 +3,7 @@
 ## How to submit
 
 1. Register a Chrome Web Store developer account at https://chrome.google.com/webstore/devconsole/register (one-time 5 USD fee).
-2. Click **New item** and upload `dist/chrome-bridge-1.3.0.zip`.
+2. Click **New item** and upload `dist/chrome-bridge-1.4.0.zip`.
 3. Fill the listing from the sections below.
 4. Upload `extension/icons/icon-128.png` and `store/assets/screenshot-1.png`.
 5. Add the privacy policy URL and submit for review.

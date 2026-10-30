@@ -85,6 +85,7 @@ node <dir>/cli.mjs tabs
 
 - Refs expire on the next snapshot or navigation. Take a fresh snapshot after the page changes.
 - `click`, `mouse` and `press` send real input events through the Chrome debugger, so menus bound to `mousedown` and shortcuts that read `keyCode` work. Add `--tab <id>` to aim at a background tab; two numbers after `mouse` are viewport pixels, not a ref and a tab id.
+- Work in the background by default. `open` creates a background tab, screenshots capture background tabs through the debugger, and `activate` is only for when the user themselves needs to look at or type in a tab.
 - If a result reports `mode:"synthetic"`, DevTools was open on that tab and the page only saw a plain `el.click()` or a key event with no `keyCode`. Close DevTools and repeat the command.
 - `type` fires `input` and `change`, so React and Vue forms see it.
 - Prefer `snapshot` over `eval` for reading pages and choosing elements.

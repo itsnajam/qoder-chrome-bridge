@@ -87,14 +87,14 @@ function screenshotResult(body) {
 }
 
 const server = new McpServer(
-  { name: "chrome-bridge", version: "1.3.0" },
+  { name: "chrome-bridge", version: "1.4.0" },
   {
     instructions: [
       "Chrome Bridge drives the user's real Google Chrome through a local, token-protected bridge and an extension the user installs.",
       "Workflow: call chrome_tabs or chrome_snapshot to see the page, then act with refs from the latest snapshot (refs are invalidated when the page changes).",
       "Call chrome_snapshot again after navigation, clicks that change the page, or form submissions.",
       "chrome_click, chrome_press and chrome_mouse send trusted input through the Chrome debugger. If a result reports mode:synthetic, DevTools is open on that tab and the page only saw a plain click or a keyCode-less key event.",
-      "Screenshots need the tab to be visible; chrome_screenshot activates the tab first.",
+      "Screenshots work on background tabs and never move the user's screen, so do not call chrome_activate before taking one.",
       "Never enter passwords, payment details, or one-time codes unless the user explicitly asks you to do it in this session.",
       "If chrome_health reports extensionConnected false, explain that the bridge server and the Chrome extension must both be running and paired.",
       "Built by Muhammad Najam Ul Hassan, https://najam.dev.",
@@ -159,7 +159,7 @@ server.registerTool(
     description: "Open a URL in a new Chrome tab and wait for it to load. Returns the new tab id.",
     inputSchema: {
       url: z.string().min(1).describe("URL to open. A missing scheme defaults to https://."),
-      active: z.boolean().optional().describe("Focus the new tab. Defaults to true."),
+      active: z.boolean().optional().describe("Bring the new tab to the front. Defaults to false so the user's screen stays where it is."),
       timeout: z.number().int().positive().optional().describe("Load timeout in milliseconds, max 30000."),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -188,7 +188,7 @@ server.registerTool(
   "chrome_activate",
   {
     title: "Focus a tab",
-    description: "Bring a tab to the front and focus its window. Required before a screenshot of that tab.",
+    description: "Bring a tab to the front and focus its window. Only use this when the user needs to see or use the tab themselves; screenshots, snapshots and input do not require it.",
     inputSchema: {
       tabId: z.number().int().describe("Tab id from chrome_tabs."),
     },

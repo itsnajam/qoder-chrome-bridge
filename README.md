@@ -121,9 +121,9 @@ Then ask Qoder something like "Can you open this site in my Chrome and fill the 
 | `chrome_health` | Bridge and extension connection state |
 | `chrome_ping` | Round-trip check, extension id and tab count |
 | `chrome_tabs` | List open tabs with ids, windows, titles and URLs |
-| `chrome_open` | Open a URL in a new tab |
+| `chrome_open` | Open a URL in a new tab, in the background by default |
 | `chrome_goto` | Navigate an existing tab |
-| `chrome_activate` | Focus a tab and its window |
+| `chrome_activate` | Bring a tab and its window to the front, only when the user needs to see it |
 | `chrome_close` | Close a tab |
 | `chrome_snapshot` | Page text plus numbered interactive elements |
 | `chrome_click` | Real mouse click on a snapshot ref or CSS selector |
@@ -132,12 +132,14 @@ Then ask Qoder something like "Can you open this site in my Chrome and fill the 
 | `chrome_press` | Real key event with the code the page expects |
 | `chrome_scroll` | Scroll the page or an element into view |
 | `chrome_wait` | Wait a duration or for a selector |
-| `chrome_screenshot` | PNG of the visible tab, returned as an image |
+| `chrome_screenshot` | PNG of a tab, including background tabs, without moving focus |
 | `chrome_eval` | Run JavaScript in the page's main world |
 
 `chrome_snapshot` numbers the elements it can see and writes `data-qcb-ref` on them. Refs stay valid until the next snapshot or navigation. Take a fresh snapshot after clicks that change the page.
 
 `chrome_click`, `chrome_press` and `chrome_mouse` attach the Chrome debugger to the target tab, send the event through `Input.dispatchMouseEvent` or `Input.dispatchKeyEvent`, and detach again. That means menus and widgets built on `mousedown` or `pointerdown` open, and shortcuts read the real `keyCode`: Gmail's `#` delete and Slack's per-message kebab both work. While attached, Chrome shows its "being debugged" banner. If the debugger cannot attach, because DevTools is already open on that tab, the command falls back to a synthetic event and reports `mode:"synthetic"` with a warning.
+
+The same trusted events also reach a tab that is not on screen. Chrome drops key and press input for background tabs, so the extension turns on focus emulation for the moment of the command. Nothing moves on screen. One side effect: that tab keeps reporting `document.hasFocus() === true` until it navigates again.
 
 ## CLI
 
@@ -168,7 +170,7 @@ node cli.mjs '{"cmd":"snapshot","tabId":123}'  # raw command
 - `press` takes `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Space`, `ArrowUp`, `Home`, `PageDown`, `F5`, a single letter or digit, or a symbol such as `#`. Uppercase letters and shifted symbols carry the shift modifier.
 - `click` and `press` run on the focused element when you give no ref. To aim at a background tab without a ref, add `--tab <id>` to any page command.
 - Two numbers after `mouse` are viewport pixels. If you mean a snapshot ref plus a tab id, write `node cli.mjs mouse click 44 --tab 211439585`.
-- `screenshot` captures the visible viewport as a PNG.
+- `screenshot` captures the visible viewport as a PNG. A background tab is captured through the debugger, so the browser never comes forward. The result reports `mode:"visible"`, `"background"` or `"focused"`; only `"focused"` means the user's screen moved, and that happens only when the window is minimized or the debugger cannot attach.
 
 Set `QCB_PORT` (default `8791`) and `QCB_TOKEN` (default: the `token` file) if your setup differs. The MCP server reads the same variables.
 
