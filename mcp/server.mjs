@@ -337,15 +337,16 @@ server.registerTool(
 server.registerTool(
   "chrome_screenshot",
   {
-    title: "Screenshot the visible tab",
+    title: "Screenshot a tab without moving the user's screen",
     description:
-      "Capture the visible area of a tab as a PNG and return it as an image. Activates and focuses the tab first, so the user will see it.",
+      "Capture a tab as a PNG and return it as an image. Background tabs are captured through the debugger, so nothing is activated or focused. If Chrome cannot paint the window, the call returns an error instead of raising it; pass focus only when bringing the tab on screen is genuinely what the user asked for.",
     inputSchema: {
       tabId: z.number().int().optional().describe("Tab id. Defaults to the active tab."),
+      focus: z.boolean().optional().describe("Allow the bridge to raise the window to capture it. Off by default."),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
-  async ({ tabId }) => screenshotResult(await callBridge({ cmd: "screenshot", tabId })),
+  async ({ tabId, focus }) => screenshotResult(await callBridge({ cmd: "screenshot", tabId, focus })),
 );
 
 server.registerTool(

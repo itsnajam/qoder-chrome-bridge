@@ -2,6 +2,14 @@ const POLL_TIMEOUT_MS = 30_000;
 const MAX_WAIT_MS = 30_000;
 const DEFAULT_PORT = 8791;
 
+// Nothing may hold the command loop open. Chrome can leave captureVisibleTab
+// pending forever when the window is occluded or on another Space, and a pending
+// extension API call keeps the service worker alive while polling stops, which
+// looks exactly like a dead extension and cannot be woken from outside.
+const COMMAND_DEADLINE_MS = 35_000;
+const VISIBLE_CAPTURE_MS = 8_000;
+const DEBUGGER_CAPTURE_MS = 20_000;
+
 // A local development build may ship config.local.js (gitignored) with
 // { token, port } so the extension pairs without using the popup.
 let LOCAL_CONFIG = null;
@@ -16,6 +24,24 @@ let lastError = "";
 let lastConfig = { token: "", port: DEFAULT_PORT };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The losing promise stays pending, which is fine: the point is that the loop
+// moves on and keeps polling instead of waiting on a capture that never lands.
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 
 async function setBadge(ok, text) {
   try {
@@ -538,10 +564,15 @@ async function run(cmd) {
       const tab = await chrome.tabs.get(tabId);
 
       // captureVisibleTab already covers the common case and avoids the debugger
-      // infobar. It never focuses the window.
+      // infobar. It never focuses the window, and it is bounded because Chrome can
+      // leave it pending when the window is occluded or on another Space.
       if (tab.active) {
         try {
-          const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+          const dataUrl = await withTimeout(
+            chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }),
+            VISIBLE_CAPTURE_MS,
+            "captureVisibleTab",
+          );
           return { ok: true, tabId, dataUrl, mode: "visible" };
         } catch {}
       }
@@ -549,16 +580,27 @@ async function run(cmd) {
       // A background tab has no visible surface, so capture it through the
       // debugger. This is what keeps the user's screen where it is.
       try {
-        const dataUrl = await captureThroughDebugger(tabId);
+        const dataUrl = await withTimeout(captureThroughDebugger(tabId), DEBUGGER_CAPTURE_MS, "debugger capture");
         return { ok: true, tabId, dataUrl, mode: "background" };
       } catch {}
 
-      // Last resort, and the only path that changes what the user is looking
-      // at: a minimized window or a page the debugger cannot attach to.
+      // Bringing the tab on screen is the only way left, and it changes what the
+      // user is looking at, so it never happens unless the caller asks for it.
+      if (cmd.focus !== true) {
+        return {
+          ok: false,
+          error: `no capturable surface for tab ${tabId} (window minimized or hidden). Resend with "focus": true to raise it, or use snapshot.`,
+          tabId,
+        };
+      }
       await chrome.tabs.update(tabId, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
       await sleep(200);
-      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      const dataUrl = await withTimeout(
+        chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }),
+        VISIBLE_CAPTURE_MS,
+        "captureVisibleTab",
+      );
       return { ok: true, tabId, dataUrl, mode: "focused" };
     }
     default:
@@ -587,7 +629,7 @@ async function pollOnce(config) {
     const cmd = await res.json();
     let payload;
     try {
-      payload = await run(cmd);
+      payload = await withTimeout(run(cmd), COMMAND_DEADLINE_MS, `the ${cmd.cmd} command`);
     } catch (e) {
       payload = { ok: false, error: String(e?.message || e) };
     }

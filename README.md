@@ -161,7 +161,7 @@ node cli.mjs press <key> [ref] [tabId]
 node cli.mjs scroll <y> [tabId]
 node cli.mjs wait <ms>
 node cli.mjs wait --selector "<css>" [tabId] [timeoutMs]
-node cli.mjs screenshot [tabId]                # saved under shots/
+node cli.mjs screenshot [tabId] [--focus]     # saved under shots/
 node cli.mjs eval '<javascript>' [tabId]       # runs in the page's main world
 node cli.mjs '{"cmd":"snapshot","tabId":123}'  # raw command
 ```
@@ -170,7 +170,7 @@ node cli.mjs '{"cmd":"snapshot","tabId":123}'  # raw command
 - `press` takes `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Space`, `ArrowUp`, `Home`, `PageDown`, `F5`, a single letter or digit, or a symbol such as `#`. Uppercase letters and shifted symbols carry the shift modifier.
 - `click` and `press` run on the focused element when you give no ref. To aim at a background tab without a ref, add `--tab <id>` to any page command.
 - Two numbers after `mouse` are viewport pixels. If you mean a snapshot ref plus a tab id, write `node cli.mjs mouse click 44 --tab 211439585`.
-- `screenshot` captures the visible viewport as a PNG. A background tab is captured through the debugger, so the browser never comes forward. The result reports `mode:"visible"`, `"background"` or `"focused"`; only `"focused"` means the user's screen moved, and that happens only when the window is minimized or the debugger cannot attach.
+- `screenshot` captures the visible viewport as a PNG and never moves the screen. An active tab is captured with `captureVisibleTab`, a background tab through the debugger, and each is time-bounded so a window that Chrome cannot paint returns an error instead of hanging. The result reports `mode:"visible"` or `"background"`. `mode:"focused"`, the only path that brings the tab forward, happens only when you send `"focus": true` (CLI: `--focus`), and it fails rather than hanging if Chrome still cannot paint the window.
 
 Set `QCB_PORT` (default `8791`) and `QCB_TOKEN` (default: the `token` file) if your setup differs. The MCP server reads the same variables.
 

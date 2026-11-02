@@ -35,9 +35,12 @@ const usage = `Chrome Bridge CLI
   node cli.mjs scroll <y> [tabId]
   node cli.mjs wait <ms>
   node cli.mjs wait --selector "<css>" [tabId] [timeoutMs]
-  node cli.mjs screenshot [tabId]
+  node cli.mjs screenshot [tabId] [--focus]
   node cli.mjs eval '<javascript>' [tabId]
   node cli.mjs '{"cmd":"snapshot","tabId":123}'
+
+screenshot never raises a window. If no capturable surface exists it returns an
+error; add --focus only when bringing the tab on screen is what you want.
 
 click, mouse and press send real input events through the debugger, so widgets
 built on mousedown or keyCode respond. They report mode:"synthetic" plus a
@@ -113,7 +116,7 @@ function command([cmd, ...rest]) {
       }
       return { cmd, ms: Number(rest[0] || 1000) };
     case "screenshot":
-      return { cmd, tabId: tabAt(rest[0]) };
+      return { cmd, tabId: tabAt(rest[0]), ...(rest.includes("--focus") ? { focus: true } : {}) };
     case "eval":
       return { cmd, code: rest[0], tabId: tabAt(rest[1]) };
     default:
