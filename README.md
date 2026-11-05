@@ -134,12 +134,18 @@ Then ask Qoder something like "Can you open this site in my Chrome and fill the 
 | `chrome_wait` | Wait a duration or for a selector |
 | `chrome_screenshot` | PNG of a tab, including background tabs, without moving focus |
 | `chrome_eval` | Run JavaScript in the page's main world |
+| `chrome_upload` | Set local files on an `input[type=file]`, hidden inputs included |
+| `chrome_visible` | Hold a tab as visible while Chrome is in the background |
 
 `chrome_snapshot` numbers the elements it can see and writes `data-qcb-ref` on them. Refs stay valid until the next snapshot or navigation. Take a fresh snapshot after clicks that change the page.
 
 `chrome_click`, `chrome_press` and `chrome_mouse` attach the Chrome debugger to the target tab, send the event through `Input.dispatchMouseEvent` or `Input.dispatchKeyEvent`, and detach again. That means menus and widgets built on `mousedown` or `pointerdown` open, and shortcuts read the real `keyCode`: Gmail's `#` delete and Slack's per-message kebab both work. While attached, Chrome shows its "being debugged" banner. If the debugger cannot attach, because DevTools is already open on that tab, the command falls back to a synthetic event and reports `mode:"synthetic"` with a warning.
 
 The same trusted events also reach a tab that is not on screen. Chrome drops key and press input for background tabs, so the extension turns on focus emulation for the moment of the command. Nothing moves on screen. One side effect: that tab keeps reporting `document.hasFocus() === true` until it navigates again.
+
+`chrome_visible` (CLI: `visible on <tabId>`) keeps that emulation on between commands instead of for one event, and holds the debugger attached to the tab, so you can drive a page that sits behind your own window for a long stretch. Add `paint` to stream frames to it as well: Chrome only advances `requestAnimationFrame` for a tab it is painting, and popovers that measure themselves in a frame, including most React select and date pickers, never appear in a hidden tab otherwise. The call reports `visibilityState`, `hasFocus` and whether a frame actually landed, so you can see what the page believes rather than guessing. `spoof` goes further and overrides `document.visibilityState` inside the page; that tells the site something that is not true, so use it only when the user has agreed. Release the tab with `visible off`, or it is dropped after 30 minutes.
+
+`chrome_upload` (CLI: `upload "<css>" /abs/path.png`) sets files straight onto an `input[type=file]` through the debugger. The input can be hidden and the operating system's file chooser never opens, which is how a background agent completes an upload form. It reports how many files the input accepted.
 
 ## CLI
 
@@ -163,6 +169,10 @@ node cli.mjs wait <ms>
 node cli.mjs wait --selector "<css>" [tabId] [timeoutMs]
 node cli.mjs screenshot [tabId] [--focus]     # saved under shots/
 node cli.mjs eval '<javascript>' [tabId]       # runs in the page's main world
+node cli.mjs upload "<css>" /abs/file.png [tabId]  # sets files on a file input
+node cli.mjs visible on <tabId> [--paint] [--spoof] # hold the tab as visible
+node cli.mjs visible off <tabId>               # release it
+node cli.mjs reload                            # reload the extension after an edit
 node cli.mjs '{"cmd":"snapshot","tabId":123}'  # raw command
 ```
 
@@ -202,7 +212,7 @@ Do not expose port `8791` through a tunnel, reverse proxy or firewall rule. A pu
 
 - No `chrome://` pages, cross-origin iframes, or shadow DOM inside shadow DOM.
 - Screenshots capture the visible viewport, not the full page.
-- File uploads and native dialogs are not supported yet.
+- File uploads go through the `upload` command, which sets an `input[type=file]` directly. The operating system file chooser itself is never opened, so a site that only accepts a real drag onto a drop zone still needs a visible tab.
 - Drag and drop needs a continuous pointer, so it is not supported. Each trusted mouse event is a separate command.
 - Trusted clicks and keys need the debugger, so they fall back to synthetic events while DevTools is open on the same tab.
 - Commands run one at a time, up to 40 seconds each.

@@ -76,6 +76,9 @@ node <dir>/cli.mjs wait <ms>
 node <dir>/cli.mjs wait --selector "<css>" [tabId] [timeoutMs]
 node <dir>/cli.mjs screenshot [tabId]
 node <dir>/cli.mjs eval '<javascript>' [tabId]
+node <dir>/cli.mjs upload "<css>" /abs/path.png [tabId]
+node <dir>/cli.mjs visible on <tabId> [--paint] [--spoof]
+node <dir>/cli.mjs visible off <tabId>
 node <dir>/cli.mjs open <url> [tabId]
 node <dir>/cli.mjs goto <url> [tabId]
 node <dir>/cli.mjs activate <tabId>
@@ -106,4 +109,5 @@ node <dir>/cli.mjs tabs
 - **`element not found`**: take a fresh snapshot.
 - **`No tab with id`**: the tab closed or Chrome restarted. Run `tabs` and use a current tab id.
 - **`chrome://` pages**: Chrome blocks extensions from scripting its own pages. Use a normal tab.
-- **Native dialogs and file uploads** are not supported.
+- **File uploads**: `upload "<css>" /abs/file.png` sets the file straight onto an `input[type=file]` through the debugger, hidden inputs included, and reports how many files it accepted. The OS file chooser never opens.
+- **Popovers that only mount while the tab is visible**: React select menus measure themselves in `requestAnimationFrame`, and Chrome stops advancing frames for a tab it is not painting, so the option list never gets a box. Run `visible on <tabId> --paint`, read the `frames` field it reports, and `visible off <tabId>` when done. `--spoof` overrides `document.visibilityState` inside the page, which tells the site something untrue, so get the user's agreement first.

@@ -87,7 +87,7 @@ function screenshotResult(body) {
 }
 
 const server = new McpServer(
-  { name: "chrome-bridge", version: "1.4.0" },
+  { name: "chrome-bridge", version: "1.5.0" },
   {
     instructions: [
       "Chrome Bridge drives the user's real Google Chrome through a local, token-protected bridge and an extension the user installs.",
@@ -362,6 +362,39 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
   async ({ code, tabId }) => result(await callBridge({ cmd: "eval", code, tabId })),
+);
+
+server.registerTool(
+  "chrome_upload",
+  {
+    title: "Set files on a file input",
+    description:
+      "Attach through the debugger and set local files on an input[type=file]. The input may be hidden and the OS file chooser never opens. Paths must be absolute and already exist on this machine. Confirm with the user before uploading anything.",
+    inputSchema: {
+      selector: z.string().min(1).describe("CSS selector of the file input, or a snapshot ref in the CLI."),
+      files: z.array(z.string().startsWith("/")).min(1).describe("Absolute paths of the files to set."),
+      tabId: z.number().int().optional().describe("Tab id. Defaults to the active tab."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  async ({ selector, files, tabId }) => result(await callBridge({ cmd: "upload", selector, files, tabId })),
+);
+
+server.registerTool(
+  "chrome_visible",
+  {
+    title: "Hold a tab open as visible while Chrome is in the background",
+    description:
+      "Keep the debugger attached to one tab with focus emulation on, so real input keeps landing while Chrome sits behind another app. Pass paint to also stream frames, which is what lets a hidden tab run requestAnimationFrame and mount popovers that measure themselves. It reports visibilityState, hasFocus and whether frames advance. spoof overrides document.visibilityState in the page, which is a lie to the site, so ask the user before using it. Call with on=false to release the tab.",
+    inputSchema: {
+      tabId: z.number().int().describe("Tab id to hold or release."),
+      on: z.boolean().optional().describe("True to hold the tab visible, false to release it. Defaults to true."),
+      paint: z.boolean().optional().describe("Stream frames to the tab so it keeps painting. Only with on."),
+      spoof: z.boolean().optional().describe("Override document.visibilityState in the page. Only with on, and only after the user agrees."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  async ({ tabId, on, paint, spoof }) => result(await callBridge({ cmd: "visible", tabId, on: on !== false, paint, spoof })),
 );
 
 const transport = new StdioServerTransport();

@@ -21,6 +21,7 @@ const usage = `Chrome Bridge CLI
   node cli.mjs health
   node cli.mjs ping
   node cli.mjs tabs
+  node cli.mjs reload
   node cli.mjs open <url> [tabId]
   node cli.mjs goto <url> [tabId]
   node cli.mjs activate <tabId>
@@ -37,10 +38,24 @@ const usage = `Chrome Bridge CLI
   node cli.mjs wait --selector "<css>" [tabId] [timeoutMs]
   node cli.mjs screenshot [tabId] [--focus]
   node cli.mjs eval '<javascript>' [tabId]
+  node cli.mjs upload "<css>" <absolute file path> [more paths] [tabId]
+  node cli.mjs visible on <tabId> [--paint] [--spoof]
+  node cli.mjs visible off <tabId>
   node cli.mjs '{"cmd":"snapshot","tabId":123}'
 
 screenshot never raises a window. If no capturable surface exists it returns an
 error; add --focus only when bringing the tab on screen is what you want.
+
+upload sets a file input through the debugger, so the input may be hidden and the
+file chooser never opens. Paths must be absolute and exist on this machine.
+
+visible keeps the debugger attached to one tab with focus emulation on, so real
+input keeps landing while Chrome sits behind another app. --paint also streams
+frames to it, which is what lets a hidden tab run requestAnimationFrame and mount
+the popovers that measure themselves. It reports visibilityState, hasFocus and
+whether frames actually advance. --spoof overrides document.visibilityState in
+the page; that is a lie to the site, so ask the user before using it. Release the
+tab with visible off, or it is dropped after 30 minutes.
 
 click, mouse and press send real input events through the debugger, so widgets
 built on mousedown or keyCode respond. They report mode:"synthetic" plus a
@@ -63,7 +78,8 @@ function command([cmd, ...rest]) {
       return { cmd };
     case "ping":
     case "tabs":
-      return { cmd: cmd === "ping" ? "ping" : "tabs" };
+    case "reload":
+      return { cmd };
     case "open":
     case "goto":
       return { cmd, url: rest[0], tabId: tabAt(rest[1]) };
@@ -119,6 +135,32 @@ function command([cmd, ...rest]) {
       return { cmd, tabId: tabAt(rest[0]), ...(rest.includes("--focus") ? { focus: true } : {}) };
     case "eval":
       return { cmd, code: rest[0], tabId: tabAt(rest[1]) };
+    case "upload": {
+      if (!rest[0]) throw new Error(`upload needs a selector\n\n${usage}`);
+      const files = [];
+      let tabId;
+      for (const value of rest.slice(1)) {
+        if (/^\d+$/.test(value)) tabId = Number(value);
+        else files.push(path.resolve(value));
+      }
+      if (!files.length) throw new Error(`upload needs at least one file path\n\n${usage}`);
+      const missing = files.filter((f) => !fs.existsSync(f));
+      if (missing.length) throw new Error(`upload: no such file: ${missing.join(", ")}`);
+      return { cmd, selector: rest[0], files, tabId };
+    }
+    case "visible": {
+      const mode = rest[0];
+      if (mode !== "on" && mode !== "off") throw new Error(`visible needs on or off\n\n${usage}`);
+      const arg = rest[1];
+      if (!arg || !/^\d+$/.test(arg)) throw new Error(`visible needs a tab id\n\n${usage}`);
+      return {
+        cmd,
+        on: mode === "on",
+        tabId: Number(arg),
+        ...(rest.includes("--paint") ? { paint: true } : {}),
+        ...(rest.includes("--spoof") ? { spoof: true } : {}),
+      };
+    }
     default:
       throw new Error(`unknown command: ${cmd}\n\n${usage}`);
   }
