@@ -22,7 +22,7 @@ const usage = `Chrome Bridge CLI
   node cli.mjs ping
   node cli.mjs tabs
   node cli.mjs reload
-  node cli.mjs open <url> [tabId]
+  node cli.mjs open <url> [tabId] [--window [WxH]]
   node cli.mjs goto <url> [tabId]
   node cli.mjs activate <tabId>
   node cli.mjs close <tabId>
@@ -41,6 +41,9 @@ const usage = `Chrome Bridge CLI
   node cli.mjs upload "<css>" <absolute file path> [more paths] [tabId]
   node cli.mjs visible on <tabId> [--paint] [--spoof]
   node cli.mjs visible off <tabId>
+  node cli.mjs window [close]
+  node cli.mjs batch '[{"cmd":"snapshot"},{"cmd":"eval","code":"1+1"}]' [--tab id] [--timeout ms]
+  node cli.mjs '[{"cmd":"eval","code":"1+1"}]'
   node cli.mjs '{"cmd":"snapshot","tabId":123}'
 
 screenshot never raises a window. If no capturable surface exists it returns an
@@ -65,6 +68,18 @@ PageUp, PageDown, F1-F12, a single character, or a symbol such as # or ?.
 Two numbers after mouse are viewport pixels; use --tab when you mean a ref and
 a tab id. Append --tab <id> to any page command to aim at a background tab.
 
+batch runs a list of commands in order against one tab in a single call. It stops
+at the first command that does not report ok, and returns every result it got, so
+a failure says which step broke instead of losing the ones that worked. Steps
+inherit the batch's tab id unless they set their own. Up to 16 steps, no nested
+batch, no reload. A plain JSON array as the first argument means the same thing.
+
+window puts a tab in its own Chrome window that is never focused. Chrome paints
+the active tab of a visible window, so popovers that measure themselves in
+requestAnimationFrame mount there without the --paint workaround and without
+pulling the user's screen. Pass --window to open, and use the window command to
+report it or close it. Closing shuts that window and every tab inside it.
+
 Set QCB_PORT (and QCB_TOKEN) if the bridge is not on 8791.`;
 
 const MOUSE_ACTIONS = ["click", "move", "down", "up"];
@@ -80,9 +95,31 @@ function command([cmd, ...rest]) {
     case "tabs":
     case "reload":
       return { cmd };
-    case "open":
+    case "open": {
+      const winFlag = rest.indexOf("--window");
+      const window = winFlag < 0 ? false : rest[winFlag + 1] && /^(\d{3,4})x(\d{3,4})$/.test(rest[winFlag + 1]) ? rest[winFlag + 1] : true;
+      const tail = rest.filter((_, i) => i !== winFlag && i !== winFlag + 1);
+      return { cmd, url: rest[0], tabId: tabAt(tail[1]), ...(window ? { window } : {}) };
+    }
     case "goto":
       return { cmd, url: rest[0], tabId: tabAt(rest[1]) };
+    case "window":
+      return { cmd, ...(rest[0] === "close" ? { close: true } : {}) };
+    case "batch": {
+      let commands;
+      try {
+        commands = JSON.parse(rest[0] ?? "");
+      } catch {
+        throw new Error(`batch needs a JSON array of commands\n\n${usage}`);
+      }
+      if (!Array.isArray(commands)) throw new Error(`batch needs a JSON array of commands\n\n${usage}`);
+      const timeoutIndex = rest.indexOf("--timeout");
+      // Every layer needs the same number: the server's pending timer, the
+      // extension's own deadline, and this client's abort timer.
+      const requested = timeoutIndex >= 0 ? Number(rest[timeoutIndex + 1]) : 0;
+      const timeoutMs = Math.min(Math.max(Number.isFinite(requested) && requested > 0 ? requested : commands.length * 20_000, 60_000), 170_000);
+      return { cmd, commands, timeoutMs };
+    }
     case "activate":
     case "close":
       return { cmd, tabId: Number(rest[0]) };
@@ -173,6 +210,7 @@ function parse() {
     process.exit(0);
   }
   if (args[0].trim().startsWith("{")) return JSON.parse(args[0]);
+  if (args[0].trim().startsWith("[")) return { cmd: "batch", commands: JSON.parse(args[0]) };
 
   const flagIndex = args.indexOf("--tab");
   let explicitTab;
@@ -207,7 +245,10 @@ async function main() {
   }
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 45_000);
+  // A batch is one command that runs many, so the client waits as long as the
+  // bridge says it may take, plus the round trip.
+  const wait = payload.timeoutMs ? Math.min(payload.timeoutMs + 5_000, 190_000) : 45_000;
+  const timer = setTimeout(() => ctrl.abort(), wait);
   let res;
   try {
     res = await fetch(`${BRIDGE}/command?token=${encodeURIComponent(TOKEN)}`, {

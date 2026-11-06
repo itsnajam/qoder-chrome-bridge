@@ -10,6 +10,17 @@ const COMMAND_DEADLINE_MS = 35_000;
 const VISIBLE_CAPTURE_MS = 8_000;
 const DEBUGGER_CAPTURE_MS = 20_000;
 
+// A batch is one command that runs several, so it needs a longer deadline than a
+// single step. The cap keeps a runaway list from holding the loop open forever.
+const BATCH_MAX_STEPS = 16;
+const BATCH_DEADLINE_MS = 170_000;
+
+// Chrome only advances frames for the active tab of a window it is painting, so a
+// background tab cannot mount popovers that measure themselves. A separate window
+// created with focused:false paints its active tab without taking the user's focus.
+const AUTOMATION_WINDOW_KEY = "qcbAutomationWindowId";
+const AUTOMATION_WINDOW_SIZE = { width: 1280, height: 900 };
+
 // A local development build may ship config.local.js (gitignored) with
 // { token, port } so the extension pairs without using the popup.
 let LOCAL_CONFIG = null;
@@ -43,6 +54,14 @@ function withTimeout(promise, ms, label) {
   });
 }
 
+// A batch runs several steps inside one command, so it gets a longer deadline.
+// Everything else keeps the single-command bound that stops a stuck capture from
+// wedging the polling loop.
+function deadlineFor(cmd) {
+  if (cmd?.cmd !== "batch") return COMMAND_DEADLINE_MS;
+  return Math.min(Math.max(Number(cmd.timeoutMs) || BATCH_DEADLINE_MS, COMMAND_DEADLINE_MS), BATCH_DEADLINE_MS);
+}
+
 async function setBadge(ok, text) {
   try {
     await chrome.action.setBadgeBackgroundColor({ color: ok ? "#1f7a3d" : "#b42318" });
@@ -66,14 +85,24 @@ async function activeTabId() {
   return any ? any.id : null;
 }
 
-async function waitForLoad(tabId, timeout = 15_000) {
+// A tab that was just created reports status "complete" with an empty URL, and a
+// tab that is being navigated keeps reporting the page it is leaving. Both look
+// finished to a single poll, so a load is only accepted once the tab has a real
+// URL that differs from the one it started on.
+async function waitForLoad(tabId, timeout = 15_000, previousUrl) {
   const limit = Math.min(Math.max(Number(timeout) || 15_000, 1_000), MAX_WAIT_MS);
   const start = Date.now();
   while (Date.now() - start < limit) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) throw new Error("tab closed");
-    if (tab.status === "complete") return tab;
-    await sleep(250);
+    const committed = tab.status === "complete" && tab.url && tab.url !== "about:blank" && tab.url !== previousUrl;
+    if (committed) {
+      await sleep(150);
+      const again = await chrome.tabs.get(tabId).catch(() => tab);
+      if (again.status === "complete" && again.url === tab.url) return again;
+      continue;
+    }
+    await sleep(200);
   }
   return chrome.tabs.get(tabId);
 }
@@ -509,6 +538,107 @@ async function targetPoint(tabId, cmd) {
   return out?.result || { ok: false, error: "element lookup returned no result" };
 }
 
+// Chrome can hold a newly created tab at an empty URL for a long time when the
+// window it belongs to is not being painted. Saying so beats returning a tab that
+// looks fine and then hanging every later command aimed at it.
+function loadNote(tab) {
+  const committed = tab?.status === "complete" && tab?.url && tab.url !== "about:blank";
+  return committed ? {} : { warning: `the page had not committed when the load wait ended (status ${tab?.status}, url ${tab?.url || "empty"}). Chrome defers tabs in windows it is not painting, so read the tab again or work in a tab that is already loaded` };
+}
+
+async function automationWindowId() {
+  try {
+    const stored = await chrome.storage.session.get({ [AUTOMATION_WINDOW_KEY]: null });
+    const id = Number(stored[AUTOMATION_WINDOW_KEY]);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const win = await chrome.windows.get(id).catch(() => null);
+    if (!win) {
+      await chrome.storage.session.set({ [AUTOMATION_WINDOW_KEY]: null }).catch(() => {});
+      return null;
+    }
+    return win.id;
+  } catch {
+    return null;
+  }
+}
+
+async function rememberAutomationWindow(id) {
+  try {
+    await chrome.storage.session.set({ [AUTOMATION_WINDOW_KEY]: id ?? null });
+  } catch {}
+}
+
+function automationWindowSize(value) {
+  const m = /^(\d{3,4})x(\d{3,4})$/.exec(String(value ?? ""));
+  return m ? { width: Number(m[1]), height: Number(m[2]) } : AUTOMATION_WINDOW_SIZE;
+}
+
+async function openInAutomationWindow(cmd) {
+  const size = automationWindowSize(cmd.window);
+  const existing = await automationWindowId();
+  let win;
+  let tab;
+  let stoleFocus = false;
+  if (existing) {
+    win = await chrome.windows.get(existing);
+    tab = await chrome.tabs.create({ url: cmd.url, windowId: existing, active: true });
+  } else {
+    win = await chrome.windows.create({ url: cmd.url, focused: false, type: "normal", ...size });
+    // On macOS a new window inherits the current Space's fullscreen state and can
+    // come up focused even when asked not to, which is the one thing this option
+    // must never do. Normalise it and say so if it had to be corrected.
+    stoleFocus = !!win.focused || win.state === "fullscreen" || win.state === "maximized";
+    if (stoleFocus) {
+      await chrome.windows.update(win.id, { state: "normal", ...size }).catch(() => {});
+      win = await chrome.windows.get(win.id).catch(() => win);
+    }
+    await rememberAutomationWindow(win.id);
+    [tab] = await chrome.tabs.query({ windowId: win.id });
+    if (!tab) return { ok: false, error: "the automation window opened without a tab" };
+  }
+  const loaded = await waitForLoad(tab.id, cmd.timeout);
+  const after = await chrome.windows.get(win.id).catch(() => win);
+  const tabs = await chrome.tabs.query({ windowId: win.id });
+  return {
+    ok: true,
+    tab: { id: loaded.id, url: loaded.url, title: loaded.title, status: loaded.status, windowId: win.id, active: loaded.active, visibility: loaded.visible ? "visible" : "hidden" },
+    ...loadNote(loaded),
+    ...(loaded.visible ? {} : { windowWarning: "Chrome reports this window as covered, so its tab is neither painting nor loading. The window only helps while some part of it is on screen; otherwise use visible on <tabId> --paint." }),
+    window: {
+      id: win.id,
+      reused: !!existing,
+      focused: !!after.focused,
+      state: after.state,
+      width: after.width,
+      height: after.height,
+      tabs: tabs.length,
+      ...(stoleFocus ? { correctedAfter: "Chrome opened this window focused or fullscreen, so the bridge set it back to normal and unfocused" } : {}),
+    },
+  };
+}
+
+async function describeAutomationWindow(cmd) {
+  const id = await automationWindowId();
+  if (!id) return { ok: true, exists: false };
+  const win = await chrome.windows.get(id).catch(() => null);
+  if (!win) {
+    await rememberAutomationWindow(null);
+    return { ok: true, exists: false, stale: true };
+  }
+  if (cmd.close === true) {
+    await chrome.windows.remove(id);
+    await rememberAutomationWindow(null);
+    return { ok: true, closed: id };
+  }
+  const tabs = await chrome.tabs.query({ windowId: id });
+  return {
+    ok: true,
+    exists: true,
+    window: { id, focused: !!win.focused, state: win.state, width: win.width, height: win.height },
+    tabs: tabs.map((t) => ({ id: t.id, url: t.url, active: t.active, visible: t.visible })),
+  };
+}
+
 async function run(cmd) {
   const tabId = cmd.tabId ?? (await activeTabId());
   if (cmd.cmd !== "visible") {
@@ -541,18 +671,56 @@ async function run(cmd) {
     }
     case "open": {
       if (!cmd.url) throw new Error("url required");
+      if (cmd.window) return await openInAutomationWindow(cmd);
       // Background by default: an agent opening pages should not pull the user
       // away from whatever they are doing. Pass active:true to bring it forward.
       const tab = await chrome.tabs.create({ url: cmd.url, active: cmd.active === true });
       const loaded = await waitForLoad(tab.id, cmd.timeout);
-      return { ok: true, tab: { id: loaded.id, url: loaded.url, title: loaded.title, status: loaded.status } };
+      return { ok: true, tab: { id: loaded.id, url: loaded.url, title: loaded.title, status: loaded.status }, ...loadNote(loaded) };
+    }
+    case "window":
+      return await describeAutomationWindow(cmd);
+    case "batch": {
+      const steps = Array.isArray(cmd.commands) ? cmd.commands : null;
+      if (!steps || !steps.length) return { ok: false, error: "batch needs commands: an array of at least one command" };
+      if (steps.length > BATCH_MAX_STEPS) return { ok: false, error: `batch takes at most ${BATCH_MAX_STEPS} commands`, steps: steps.length };
+      const badAt = steps.findIndex((s) => !s || typeof s !== "object" || typeof s.cmd !== "string" || s.cmd === "batch" || s.cmd === "reload" || s.cmd === "health");
+      if (badAt >= 0) {
+        return { ok: false, error: `batch step ${badAt} is not usable: every entry needs a cmd, and batch, reload and health cannot nest` };
+      }
+      const results = [];
+      const until = Date.now() + deadlineFor(cmd) - 3_000;
+      // A batch is scoped to one tab. If the caller did not name one and a step
+      // opens a tab, that tab becomes the batch's tab, so a list starting with
+      // open does not go on to act on whatever the user happens to be looking at.
+      let batchTab = tabId ?? null;
+      for (let i = 0; i < steps.length; i++) {
+        if (Date.now() > until) {
+          return { ok: false, error: `batch ran out of time before step ${i} (${steps[i].cmd})`, ran: results.length, stoppedAt: i, results };
+        }
+        const step = { ...steps[i] };
+        if (step.tabId == null && batchTab != null) step.tabId = batchTab;
+        let out;
+        try {
+          out = await run(step);
+        } catch (e) {
+          out = { ok: false, error: String(e?.message || e) };
+        }
+        results.push({ step: i, cmd: step.cmd, ...out });
+        if (cmd.tabId == null && out?.tab?.id != null) batchTab = out.tab.id;
+        if (out?.ok !== true) {
+          return { ok: false, error: `step ${i} (${step.cmd}) failed: ${out?.error || "it reported no error"}`, ran: results.length, stoppedAt: i, results };
+        }
+      }
+      return { ok: true, tabId: batchTab, ran: results.length, results };
     }
     case "goto": {
       if (!tabId) throw new Error("no tab");
       if (!cmd.url) throw new Error("url required");
+      const before = await chrome.tabs.get(tabId).catch(() => null);
       await chrome.tabs.update(tabId, { url: cmd.url });
-      const loaded = await waitForLoad(tabId, cmd.timeout);
-      return { ok: true, tab: { id: loaded.id, url: loaded.url, title: loaded.title, status: loaded.status } };
+      const loaded = await waitForLoad(tabId, cmd.timeout, before?.url);
+      return { ok: true, tab: { id: loaded.id, url: loaded.url, title: loaded.title, status: loaded.status }, ...loadNote(loaded) };
     }
     case "activate": {
       if (!tabId) throw new Error("no tab");
@@ -741,37 +909,46 @@ async function run(cmd) {
       if (files.some((f) => !f.startsWith("/"))) return { ok: false, error: "upload needs absolute paths", tabId };
       const selector = cmd.selector || (cmd.ref != null ? `[data-qcb-ref="${cmd.ref}"]` : "");
       if (!selector) return { ok: false, error: "upload needs a selector or ref", tabId };
+      const readBack = `(function(){var e=document.querySelector(${JSON.stringify(selector)});
+        if(!e) return {missing:true};
+        return {tag:e.tagName, type:e.type, files:(e.files||[]).length, names:Array.from(e.files||[]).map(function(f){return f.name+":"+f.size}), visible:!!(e.getBoundingClientRect().width||e.getBoundingClientRect().height)};})()`;
       try {
         return await withDebugger(tabId, async (send) => {
           await send("Page.enable").catch(() => {});
           await send("DOM.enable").catch(() => {});
-          const found = await send("Runtime.evaluate", {
-            expression: `document.querySelector(${JSON.stringify(selector)})`,
-          });
-          const object = found?.result || {};
-          if (object.subtype === "null" || object.type === "undefined" || object.value === null) {
-            return { ok: false, error: `no element for selector: ${selector}`, tabId };
-          }
-          if (!object.objectId) return { ok: false, error: `cannot hold a reference to ${selector}`, tabId };
-          const described = await send("Runtime.callFunctionOn", {
-            objectId: object.objectId,
-            functionDeclaration: `function(){return {tag:this.tagName, type:this.type, files:(this.files||[]).length, visible:!!(this.getBoundingClientRect().width||this.getBoundingClientRect().height)}}`,
-            returnByValue: true,
-          });
-          const info = described?.result?.value || {};
+          const before = await send("Runtime.evaluate", { expression: readBack, returnByValue: true });
+          const info = before?.result?.value || {};
+          if (info.missing) return { ok: false, error: `no element for selector: ${selector}`, tabId };
           if (String(info.tag).toLowerCase() !== "input" || String(info.type) !== "file") {
             return { ok: false, error: `${selector} is not an input[type=file] (it is ${info.tag || "?"}${info.type ? "[type=" + info.type + "]" : ""})`, tabId };
           }
-          const node = await send("DOM.requestNode", { objectId: object.objectId });
-          if (!node?.nodeId) return { ok: false, error: "DOM.requestNode returned no node", tabId };
-          await send("DOM.setFileInputFiles", { files, nodeId: String(node.nodeId) });
-          const after = await send("Runtime.callFunctionOn", {
-            objectId: object.objectId,
-            functionDeclaration: `function(){return {files:(this.files||[]).length, names:Array.from(this.files||[]).map(function(f){return f.name+":"+f.size})}}`,
-            returnByValue: true,
-          });
+          // A node id from the DOM domain is what setFileInputFiles wants. Going
+          // through Runtime.evaluate and DOM.requestNode fails on a tab whose DOM
+          // agent has not pushed the node yet, which is most background tabs, so
+          // the document tree is asked for directly and the object path is only
+          // the fallback.
+          let target = {};
+          const doc = await send("DOM.getDocument", { depth: -1, pierce: true }).catch(() => null);
+          if (doc?.root?.nodeId) {
+            const found = await send("DOM.querySelector", { nodeId: doc.root.nodeId, selector }).catch(() => null);
+            if (found?.nodeId) target = { nodeId: found.nodeId };
+          }
+          if (!target.nodeId) {
+            const object = await send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(selector)})` });
+            if (object?.result?.objectId) {
+              const node = await send("DOM.requestNode", { objectId: object.result.objectId }).catch(() => null);
+              if (node?.nodeId) target = { nodeId: node.nodeId };
+            }
+          }
+          if (!target.nodeId) {
+            const described = await send("Runtime.evaluate", { expression: readBack, returnByValue: true });
+            return { ok: false, error: "the debugger found the input but could not hand it a node, so the file was not set", tabId, selector, input: described?.result?.value };
+          }
+          const pushed = await send("DOM.setFileInputFiles", { files, ...target }).catch((e) => ({ error: String(e?.message || e) }));
+          if (pushed?.error) return { ok: false, error: `setFileInputFiles failed: ${pushed.error}`, tabId, selector };
+          const after = await send("Runtime.evaluate", { expression: readBack, returnByValue: true });
           const set = after?.result?.value || {};
-          return { ok: set.files > 0, tabId, selector, files: files.length, accepted: set.files || 0, names: set.names, inputWasHidden: info.visible === false };
+          return { ok: set.files > 0, tabId, selector, files: files.length, accepted: set.files || 0, names: set.names, inputWasHidden: info.visible === false, via: target.backendNodeId ? "backendNodeId" : "nodeId" };
         });
       } catch (e) {
         return { ok: false, error: attachError(e), tabId };
@@ -860,7 +1037,7 @@ async function pollOnce(config) {
     const cmd = await res.json();
     let payload;
     try {
-      payload = await withTimeout(run(cmd), COMMAND_DEADLINE_MS, `the ${cmd.cmd} command`);
+      payload = await withTimeout(run(cmd), deadlineFor(cmd), `the ${cmd.cmd} command`);
     } catch (e) {
       payload = { ok: false, error: String(e?.message || e) };
     }

@@ -79,11 +79,13 @@ node <dir>/cli.mjs eval '<javascript>' [tabId]
 node <dir>/cli.mjs upload "<css>" /abs/path.png [tabId]
 node <dir>/cli.mjs visible on <tabId> [--paint] [--spoof]
 node <dir>/cli.mjs visible off <tabId>
-node <dir>/cli.mjs open <url> [tabId]
+node <dir>/cli.mjs open <url> [tabId] [--window [WxH]]
 node <dir>/cli.mjs goto <url> [tabId]
 node <dir>/cli.mjs activate <tabId>
 node <dir>/cli.mjs close <tabId>
 node <dir>/cli.mjs tabs
+node <dir>/cli.mjs window [close]
+node <dir>/cli.mjs batch '[{"cmd":"snapshot"},{"cmd":"eval","code":"1+1"}]' [--tab id] [--timeout ms]
 ```
 
 - Refs expire on the next snapshot or navigation. Take a fresh snapshot after the page changes.
@@ -93,6 +95,20 @@ node <dir>/cli.mjs tabs
 - `type` fires `input` and `change`, so React and Vue forms see it.
 - Prefer `snapshot` over `eval` for reading pages and choosing elements.
 - Verify the result after an action: snapshot again, read the changed state, or take a screenshot when visual confirmation matters.
+- `batch` runs a list of commands against one tab in a single call, stops at the first one that fails, and returns every result it got with the index it stopped at. Use it for a known sequence (open, wait for the element, fill three fields, read it back) instead of one call each. A tab the batch opens becomes its tab.
+- `open <url> --window` puts a page in its own window and never leaves that window focused. Chrome on macOS still creates it focused or fullscreen, so the bridge corrects it and reports `correctedAfter`. A window no part of which is on screen is treated as covered by Chrome, so its tab neither loads nor paints: check `tab.visibility` before relying on it, and use `visible on <tabId> --paint` otherwise.
+
+### How to work a page
+
+On a form or a widget you have not seen before, **look first and touch it like a user**:
+
+1. `screenshot` the region, or `snapshot` if the page is mostly text, so you know what the control actually is.
+2. Drive it with real input: `click`, `mouse click <x> <y>`, `type`, `press`. Take coordinates from the page (`getBoundingClientRect`), never from screenshot pixels; a screenshot is scaled, and clicking its numbers lands somewhere else.
+3. Only if a real click genuinely does not work, script the page (dispatch the event sequence with `eval`), and say in the report that you fell back to scripting.
+
+That order matters because most modern widgets, including React select menus, date pickers and drag handles, respond to trusted input, while a scripted event can look like success even though the component's own state never changed.
+
+**Stop after 30 minutes of browser work on one task.** If the page still will not be driven, stop, write down exactly what is blocking it, and hand the user paste-ready text instead: the field labels, the values to type, and the order to do it in.
 
 ## 4. Safety rules
 
@@ -105,7 +121,8 @@ node <dir>/cli.mjs tabs
 ## 5. Troubleshooting
 
 - **`extension not connected`**: the popup shows `set` (no token) or `!` (bridge unreachable or wrong token). Start the server, paste `node server.mjs --token` into the popup, click Reconnect. If it still fails, reload the extension at `chrome://extensions`.
-- **`command timed out`**: check `health`. A 40 second command limit applies; break long work into smaller commands.
+- **`command timed out`**: check `health`. A single command has a 40 second bound; a `batch` may run for up to about three minutes, and `--timeout` sets it. Long work is better split into commands than stretched.
+- **`open` returns a tab with an empty URL and a `warning`**: Chrome is not painting that window, so it has not started the load yet. Read the tab again after a moment, navigate a tab that is already loaded, or use `visible on <tabId> --paint`.
 - **`element not found`**: take a fresh snapshot.
 - **`No tab with id`**: the tab closed or Chrome restarted. Run `tabs` and use a current tab id.
 - **`chrome://` pages**: Chrome blocks extensions from scripting its own pages. Use a normal tab.

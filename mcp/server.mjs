@@ -34,7 +34,7 @@ function withScheme(url) {
   return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
 }
 
-async function callBridge(payload) {
+async function callBridge(payload, waitMs) {
   if (!TOKEN) {
     return {
       ok: false,
@@ -43,7 +43,7 @@ async function callBridge(payload) {
     };
   }
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), Math.min(Math.max(Number(waitMs) || TIMEOUT_MS, TIMEOUT_MS), 190_000));
   let res;
   try {
     res = await fetch(`${BRIDGE}/command?token=${encodeURIComponent(TOKEN)}`, {
@@ -156,16 +156,56 @@ server.registerTool(
   "chrome_open",
   {
     title: "Open a URL in a new tab",
-    description: "Open a URL in a new Chrome tab and wait for it to load. Returns the new tab id.",
+    description:
+      "Open a URL in a new Chrome tab and wait for it to load. Returns the new tab id. Pass window to open it in a dedicated automation window instead: that window is never focused, so the user's screen and keyboard stay put, but Chrome paints its active tab, which is what lets popovers that measure themselves mount.",
     inputSchema: {
       url: z.string().min(1).describe("URL to open. A missing scheme defaults to https://."),
       active: z.boolean().optional().describe("Bring the new tab to the front. Defaults to false so the user's screen stays where it is."),
       timeout: z.number().int().positive().optional().describe("Load timeout in milliseconds, max 30000."),
+      window: z
+        .union([z.boolean(), z.string().regex(/^\d{3,4}x\d{3,4}$/)])
+        .optional()
+        .describe("Open in the dedicated automation window. true uses 1280x900; a string like 1440x900 sets the size."),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
-  async ({ url, active, timeout }) =>
-    result(await callBridge({ cmd: "open", url: withScheme(url), active, timeout })),
+  async ({ url, active, timeout, window }) =>
+    result(await callBridge({ cmd: "open", url: withScheme(url), active, timeout, window })),
+);
+
+server.registerTool(
+  "chrome_window",
+  {
+    title: "Report or close the automation window",
+    description:
+      "Report the dedicated automation window and the tabs inside it, which is how to check whether it stayed unfocused. Pass close to shut that window and every tab in it. Only the window this bridge created is touched, never the user's own windows.",
+    inputSchema: {
+      close: z.boolean().optional().describe("Close the automation window and its tabs. Defaults to false, which only reports."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  },
+  async ({ close }) => result(await callBridge({ cmd: "window", close })),
+);
+
+server.registerTool(
+  "chrome_batch",
+  {
+    title: "Run several commands in one round trip",
+    description:
+      "Run a list of commands against one tab in a single call, in order. It stops at the first command that does not report ok and returns every result gathered, with the index it stopped at, so a failure says which step broke instead of losing the steps that worked. Steps inherit the batch tab id unless they set their own. At most 16 steps; batch, reload and health cannot nest inside. This takes longer than one command, so the bridge allows up to about three minutes.",
+    inputSchema: {
+      commands: z
+        .array(z.record(z.string(), z.unknown()))
+        .min(1)
+        .max(16)
+        .describe('Commands in order, each an object with a cmd, for example [{"cmd":"snapshot"},{"cmd":"eval","code":"1+1"}].'),
+      tabId: z.number().int().optional().describe("Tab id the steps run against unless a step sets its own."),
+      timeoutMs: z.number().int().min(1000).max(170000).optional().describe("Whole-batch deadline in milliseconds."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  async ({ commands, tabId, timeoutMs }) =>
+    result(await callBridge({ cmd: "batch", commands, tabId, timeoutMs }, timeoutMs ? timeoutMs + 10_000 : undefined)),
 );
 
 server.registerTool(

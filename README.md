@@ -121,7 +121,7 @@ Then ask Qoder something like "Can you open this site in my Chrome and fill the 
 | `chrome_health` | Bridge and extension connection state |
 | `chrome_ping` | Round-trip check, extension id and tab count |
 | `chrome_tabs` | List open tabs with ids, windows, titles and URLs |
-| `chrome_open` | Open a URL in a new tab, in the background by default |
+| `chrome_open` | Open a URL in a new tab, in the background by default, or in the automation window |
 | `chrome_goto` | Navigate an existing tab |
 | `chrome_activate` | Bring a tab and its window to the front, only when the user needs to see it |
 | `chrome_close` | Close a tab |
@@ -136,6 +136,8 @@ Then ask Qoder something like "Can you open this site in my Chrome and fill the 
 | `chrome_eval` | Run JavaScript in the page's main world |
 | `chrome_upload` | Set local files on an `input[type=file]`, hidden inputs included |
 | `chrome_visible` | Hold a tab as visible while Chrome is in the background |
+| `chrome_window` | Report or close the dedicated automation window |
+| `chrome_batch` | Run a list of commands in order in one call, stopping at the first error |
 
 `chrome_snapshot` numbers the elements it can see and writes `data-qcb-ref` on them. Refs stay valid until the next snapshot or navigation. Take a fresh snapshot after clicks that change the page.
 
@@ -145,7 +147,11 @@ The same trusted events also reach a tab that is not on screen. Chrome drops key
 
 `chrome_visible` (CLI: `visible on <tabId>`) keeps that emulation on between commands instead of for one event, and holds the debugger attached to the tab, so you can drive a page that sits behind your own window for a long stretch. Add `paint` to stream frames to it as well: Chrome only advances `requestAnimationFrame` for a tab it is painting, and popovers that measure themselves in a frame, including most React select and date pickers, never appear in a hidden tab otherwise. The call reports `visibilityState`, `hasFocus` and whether a frame actually landed, so you can see what the page believes rather than guessing. `spoof` goes further and overrides `document.visibilityState` inside the page; that tells the site something that is not true, so use it only when the user has agreed. Release the tab with `visible off`, or it is dropped after 30 minutes.
 
-`chrome_upload` (CLI: `upload "<css>" /abs/path.png`) sets files straight onto an `input[type=file]` through the debugger. The input can be hidden and the operating system's file chooser never opens, which is how a background agent completes an upload form. It reports how many files the input accepted.
+`chrome_upload` (CLI: `upload "<css>" /abs/path.png`) sets files straight onto an `input[type=file]` through the debugger. The input can be hidden and the operating system's file chooser never opens, which is how a background agent completes an upload form. It reports how many files the input accepted. The node is looked up through the DOM domain rather than from a script object, because a background tab has often not pushed its nodes yet and the object route silently returns nothing.
+
+`chrome_batch` (CLI: `batch '<json array>'`) runs a list of commands against one tab in a single round trip, in order, and stops at the first command that does not report `ok`. Every result gathered is returned with `stoppedAt`, so a broken sequence says which step broke instead of losing the ones that worked. A tab the batch opens becomes the batch's tab, so a list that starts with `open` cannot wander into whatever the user is looking at. Up to 16 steps, and it may run for about three minutes rather than the 40 seconds a single command gets.
+
+`chrome_window` (CLI: `window`, `open <url> --window`) keeps a dedicated automation window. Chrome only advances frames and starts loads for a window it is painting, and a background tab in the user's own window is usually not one, so a separate window is the honest way to get a page that behaves as visible without touching the user's screen. The window is created unfocused; macOS Chrome still hands back a focused or fullscreen one, so the bridge sets it straight and reports `correctedAfter`. If no part of the window is on screen Chrome treats it as covered and its tab neither loads nor paints, which the result says instead of pretending, and `visible --paint` remains the way to force frames.
 
 ## CLI
 
@@ -153,7 +159,7 @@ The same trusted events also reach a tab that is not on screen. Chrome drops key
 node cli.mjs health                            # bridge and connection state
 node cli.mjs ping
 node cli.mjs tabs
-node cli.mjs open <url> [tabId]                # new tab
+node cli.mjs open <url> [tabId] [--window [WxH]]  # new tab, or in the automation window
 node cli.mjs goto <url> [tabId]
 node cli.mjs activate <tabId>
 node cli.mjs close <tabId>
@@ -172,10 +178,14 @@ node cli.mjs eval '<javascript>' [tabId]       # runs in the page's main world
 node cli.mjs upload "<css>" /abs/file.png [tabId]  # sets files on a file input
 node cli.mjs visible on <tabId> [--paint] [--spoof] # hold the tab as visible
 node cli.mjs visible off <tabId>               # release it
+node cli.mjs window [close]                    # report or close the automation window
+node cli.mjs batch '[{"cmd":"snapshot"},{"cmd":"eval","code":"1+1"}]' [--tab id] [--timeout ms]
 node cli.mjs reload                            # reload the extension after an edit
 node cli.mjs '{"cmd":"snapshot","tabId":123}'  # raw command
 ```
 
+- `batch` takes a list of commands and runs them in order against one tab in a single call. It stops at the first command that does not report `ok` and returns every result it gathered plus `stoppedAt`, so a failure tells you which step broke instead of losing the steps that worked. Steps inherit the batch's tab unless they set their own, and a tab the batch opens becomes that tab. Up to 16 steps; `batch`, `reload` and `health` cannot nest. It may run for up to about three minutes, which `--timeout` sets.
+- `open --window` creates a separate Chrome window for automation and keeps it unfocused, so the user's keyboard and screen stay put. Chrome on macOS still hands back a focused or fullscreen window, so the bridge corrects it and says so with `correctedAfter`. A window no part of which is on screen counts as covered, and its tab then neither loads nor paints: read `tab.visibility` and fall back to `visible on <tabId> --paint`.
 - `type` sets the field value and fires `input` and `change`, so React and Vue forms see it. Add `--submit` to submit the surrounding form.
 - `press` takes `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Space`, `ArrowUp`, `Home`, `PageDown`, `F5`, a single letter or digit, or a symbol such as `#`. Uppercase letters and shifted symbols carry the shift modifier.
 - `click` and `press` run on the focused element when you give no ref. To aim at a background tab without a ref, add `--tab <id>` to any page command.
@@ -215,7 +225,8 @@ Do not expose port `8791` through a tunnel, reverse proxy or firewall rule. A pu
 - File uploads go through the `upload` command, which sets an `input[type=file]` directly. The operating system file chooser itself is never opened, so a site that only accepts a real drag onto a drop zone still needs a visible tab.
 - Drag and drop needs a continuous pointer, so it is not supported. Each trusted mouse event is a separate command.
 - Trusted clicks and keys need the debugger, so they fall back to synthetic events while DevTools is open on the same tab.
-- Commands run one at a time, up to 40 seconds each.
+- Commands run one at a time, up to 40 seconds each. A `batch` is one command and may run for about three minutes, still one step at a time.
+- A window that no part of is on screen counts as covered: Chrome neither loads nor paints its tabs, so `--window` only helps while the window is at least partly visible. `visible --paint` is what works when it is not.
 - The extension does not load or run remote code.
 - ChatGPT desktop and web cannot connect to a local-only server. Use Codex CLI or the Codex IDE extension.
 

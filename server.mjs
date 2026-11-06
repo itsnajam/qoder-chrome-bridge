@@ -10,7 +10,14 @@ const PORT = Number(process.env.QCB_PORT || 8791);
 const POLL_HOLD_MS = 25_000;
 const CONNECTED_MS = POLL_HOLD_MS + 10_000;
 const COMMAND_TIMEOUT_MS = 40_000;
+const MAX_COMMAND_TIMEOUT_MS = 175_000;
 const MAX_BODY = 25 * 1024 * 1024;
+
+function timeoutFor(body) {
+  const requested = Number(body.timeoutMs);
+  if (!Number.isFinite(requested)) return COMMAND_TIMEOUT_MS;
+  return Math.min(Math.max(requested, 1_000), MAX_COMMAND_TIMEOUT_MS);
+}
 
 function loadToken() {
   if (process.env.QCB_TOKEN?.trim()) return process.env.QCB_TOKEN.trim();
@@ -62,7 +69,11 @@ function send(res, code, body) {
 
 function connected() {
   const seen = Math.max(lastPoll, lastDelivered);
-  const window = pending.size ? COMMAND_TIMEOUT_MS + 15_000 : CONNECTED_MS;
+  // A batch holds the loop longer than one command, so the connected window has to
+  // stretch to the longest command still pending instead of the default bound.
+  let longest = COMMAND_TIMEOUT_MS;
+  for (const entry of pending.values()) longest = Math.max(longest, entry.timeoutMs);
+  const window = pending.size ? longest + 15_000 : CONNECTED_MS;
   return Date.now() - seen < window;
 }
 
@@ -200,6 +211,7 @@ const server = http.createServer(async (req, res) => {
       }
       const id = randomUUID();
       const command = { id, ...body };
+      const limit = timeoutFor(body);
       if (!connected()) {
         send(res, 503, {
           ok: false,
@@ -211,9 +223,9 @@ const server = http.createServer(async (req, res) => {
       const promise = new Promise((resolve) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          resolve({ ok: false, error: "command timed out", id, cmd: body.cmd });
-        }, COMMAND_TIMEOUT_MS);
-        pending.set(id, { resolve, timer });
+          resolve({ ok: false, error: `command timed out after ${limit}ms`, id, cmd: body.cmd });
+        }, limit);
+        pending.set(id, { resolve, timer, timeoutMs: limit });
       });
       if (!deliver(command)) queue.push(command);
       const result = await promise;
