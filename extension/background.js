@@ -186,6 +186,18 @@ function pageType(ref, selector, text, submit) {
   return { ok: true, tag: el.tagName.toLowerCase() };
 }
 
+function pageTypeFocus(ref, selector) {
+  const el = selector ? document.querySelector(selector) : document.querySelector(`[data-qcb-ref="${ref}"]`);
+  if (!el) return { ok: false, error: "element not found" };
+  el.scrollIntoView({ block: "center" });
+  el.focus();
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    return { ok: true, kind: "field", tag: el.tagName.toLowerCase() };
+  }
+  if (el.isContentEditable) return { ok: true, kind: "contenteditable", tag: el.tagName.toLowerCase() };
+  return { ok: false, error: "element is not editable" };
+}
+
 function pagePress(ref, selector, key) {
   const el = selector ? document.querySelector(selector) : ref ? document.querySelector(`[data-qcb-ref="${ref}"]`) : document.activeElement;
   if (!el) return { ok: false, error: "element not found" };
@@ -779,12 +791,59 @@ async function run(cmd) {
     }
     case "type": {
       if (!tabId) throw new Error("no tab");
-      const [out] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: pageType,
-        args: [cmd.ref ?? null, cmd.selector ?? null, String(cmd.text ?? ""), !!cmd.submit],
+      const text = String(cmd.text ?? "");
+      // Focus the target in whichever frame owns it, so iframe editors are reached too.
+      const frames = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: pageTypeFocus,
+        args: [cmd.ref ?? null, cmd.selector ?? null],
       });
-      return { ...out.result, tabId };
+      const hit = frames.find((r) => r?.result?.ok);
+      if (!hit) {
+        const miss = frames.find((r) => r?.result && r.result.error !== "element not found")?.result
+          || frames[0]?.result || { ok: false, error: "element not found" };
+        return { ...miss, tabId };
+      }
+      const frameIds = [hit.frameId];
+      // Plain fields keep the native setter: it preserves newlines and feeds React.
+      if (hit.result.kind === "field") {
+        const [out] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds },
+          func: pageType,
+          args: [cmd.ref ?? null, cmd.selector ?? null, text, !!cmd.submit],
+        });
+        return { ...out.result, tabId };
+      }
+      // Contenteditable: trusted insertText per line with an Enter between lines, so
+      // paragraph breaks survive editors that ignore a textContent assignment.
+      try {
+        const lines = text.split("\n");
+        await withInput(tabId, async (send) => {
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i]) await send("Input.insertText", { text: lines[i] });
+            if (i < lines.length - 1) await sendKey(send, keyDescriptor("Enter"));
+          }
+        });
+        if (cmd.submit) {
+          await chrome.scripting.executeScript({
+            target: { tabId, frameIds },
+            func: (ref, selector) => {
+              const el = selector ? document.querySelector(selector) : document.querySelector(`[data-qcb-ref="${ref}"]`);
+              const form = el?.closest("form");
+              if (form) form.requestSubmit();
+            },
+            args: [cmd.ref ?? null, cmd.selector ?? null],
+          });
+        }
+        return { ok: true, mode: "trusted", tabId, tag: hit.result.tag, lines: lines.length };
+      } catch (e) {
+        const [out] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds },
+          func: pageType,
+          args: [cmd.ref ?? null, cmd.selector ?? null, text, !!cmd.submit],
+        });
+        return { ...out.result, tabId, mode: "synthetic", warning: `${attachError(e)}; used textContent instead` };
+      }
     }
     case "press": {
       if (!tabId) throw new Error("no tab");
